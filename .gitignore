@@ -1,0 +1,5 @@
+*.DS_Store
+*.ipynb
+*pycache*
+*test*
+*venv*
