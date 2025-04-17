@@ -8,7 +8,6 @@ This project uses DINOv2 (a Vision Transformer model) as a backbone for keypoint
 - Custom heads for 2D heatmap prediction and 3D z-coordinate estimation
 - Support for arbitrary number of keypoints (current version trained with 24 keypoints)
 - Simple inference demo with visualization
-- Trained using M2 Macbook pro
 
 ## Quick Start
 
