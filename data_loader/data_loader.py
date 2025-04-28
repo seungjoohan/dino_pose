@@ -100,6 +100,8 @@ class PoseDataset(Dataset):
         x_std = np.std(x_coords)
         y_std = np.std(y_coords)
         scale = (x_std + y_std) / 2
+        if scale == 0:
+            scale = np.finfo(np.float32).eps
 
         z_coords = keypoints_3d - np.sum(keypoints_3d * com_weights)
         scaled_z = z_coords / scale
