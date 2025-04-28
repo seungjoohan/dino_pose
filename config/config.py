@@ -37,14 +37,13 @@ def get_default_configs():
         "multiprocessing_num": 4,
         "print_freq": 10,
         "save_freq": 5,
-        "checkpoint_dir": "checkpoints"
+        "checkpoint_dir": "dinov2_pose"
     }
 
     config_model = {
         "model_name": "facebook/dinov2-base",
         "num_keypoints": 24,
         "unfreeze_last_n_layers": 0,
-        "checkpoint_dir": "finetuned_dinov2_pose",
         "output_heatmap_size": 48
     }
     

@@ -101,13 +101,13 @@ def train_one_epoch(model, dataloader, device, optimizer, epoch, print_freq=10):
         # Update statistics
         running_loss += loss.item()
         running_keypoint_loss += kp_loss.item()
-        running_z_coords_loss += z_coords_loss.item()
+        running_z_coords_loss += z_coords_loss.item() * 0.1
         
         # Update progress bar
         progress_bar.set_postfix({
-            'loss': running_loss / (i + 1),
-            'kp_loss': running_keypoint_loss / (i + 1),
-            'z_coords_loss': running_z_coords_loss / (i + 1)
+            'loss': f"{running_loss / (i + 1):.6f}",
+            'kp_loss': f"{running_keypoint_loss / (i + 1):.6f}",
+            'z_coords_loss': f"{running_z_coords_loss / (i + 1):.6f}"
         })
     
     # Calculate average losses
@@ -163,13 +163,13 @@ def validate(model, dataloader, device):
             # Update statistics
             running_loss += loss.item()
             running_keypoint_loss += kp_loss.item()
-            running_z_coords_loss += z_coords_loss.item()
+            running_z_coords_loss += z_coords_loss.item() * 0.1
             
             # Update progress bar
             progress_bar.set_postfix({
-                'val_loss': running_loss / (i + 1),
-                'val_kp_loss': running_keypoint_loss / (i + 1),
-                'val_z_coords_loss': running_z_coords_loss / (i + 1)
+                'val_loss': f"{running_loss / (i + 1):.6f}",
+                'val_kp_loss': f"{running_keypoint_loss / (i + 1):.6f}",
+                'val_z_coords_loss': f"{running_z_coords_loss / (i + 1):.6f}"
             })
     
     # Calculate average losses
@@ -186,7 +186,7 @@ def main(args):
     config_dataset, config_training, config_preproc, config_model = get_default_configs()
     
     # Create checkpoint directory if it doesn't exist
-    os.makedirs(config_model['checkpoint_dir'], exist_ok=True)
+    os.makedirs(config_training['checkpoint_dir'], exist_ok=True)
     
     # Create dataloader
     print(f"Creating dataloader for {config_dataset['train_images_dir']}...")
@@ -247,15 +247,13 @@ def main(args):
         optimizer,
         mode='min',
         factor=0.5,
-        patience=5,
-        verbose=True
+        patience=5
     )
     
     # Training loop
     print("Starting training...")
     train_losses = []
     val_losses = []
-    best_val_loss = float('inf')
     best_pckh_2d = 0
     best_pckh_3d = 0
     
@@ -283,10 +281,9 @@ def main(args):
             # Update scheduler
             scheduler.step(val_loss)
             
-            # Save best model
-            if val_loss < best_val_loss:
-                best_val_loss = val_loss
-                checkpoint_path = os.path.join(config_training['checkpoint_dir'], 'best_model.pth')
+            # Save checkpoint
+            if (epoch + 1) % config_training['save_freq'] == 0:
+                checkpoint_path = os.path.join(config_training['checkpoint_dir'], f'checkpoint_epoch_{epoch+1}.pth')
                 torch.save({
                     'epoch': epoch,
                     'model_state_dict': model.state_dict(),
@@ -297,7 +294,7 @@ def main(args):
                     'config_training': config_training,
                     'config_preproc': config_preproc
                 }, checkpoint_path)
-                print(f"Saved best model to {checkpoint_path}")
+                print(f"Saved checkpoint to {checkpoint_path}")
         
         # Save checkpoint
         if (epoch + 1) % config_training['save_freq'] == 0:
@@ -306,6 +303,7 @@ def main(args):
             pckh_3d = []
             for batch in val_dataloader:
                 pred_heatmaps, pred_z_coords = model(batch['image'])
+                #### debug device issue here
                 np_pred_heatmaps = pred_heatmaps.cpu().detach().numpy()
                 np_pred_z_coords = pred_z_coords.cpu().detach().numpy()
                 
@@ -324,7 +322,7 @@ def main(args):
 
             # save model only when either 2d or 3d pckh improved
             if np.mean(pckh_2d) > best_pckh_2d or np.mean(pckh_3d) > best_pckh_3d:
-                checkpoint_path = os.path.join(config_training['checkpoint_dir'], f'checkpoint_epoch_{epoch+1}.pth')
+                checkpoint_path = os.path.join(config_training['checkpoint_dir'], f'best_model.pth')
                 torch.save({
                     'epoch': epoch,
                     'model_state_dict': model.state_dict(),
@@ -334,7 +332,7 @@ def main(args):
                     'config_training': config_training,
                     'config_preproc': config_preproc
                 }, checkpoint_path)
-                print(f"Saved checkpoint to {checkpoint_path}")
+                print(f"Saved best model to {checkpoint_path}")
             
             # update best pckh scores
             if np.mean(pckh_2d) > best_pckh_2d:
