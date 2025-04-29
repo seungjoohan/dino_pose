@@ -1,7 +1,5 @@
 import os
-import sys
 import argparse
-import time
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -9,13 +7,10 @@ from torch.optim.lr_scheduler import ReduceLROnPlateau
 import numpy as np
 import matplotlib.pyplot as plt
 from tqdm import tqdm
-import json
-
 from model.dinov2_pose import Dinov2PoseModel
 from data_loader.data_loader import create_dataloaders
 from config.config import get_default_configs
-from src.model_utils import compute_pckh_batch, compute_pckh_z_batch
-
+from src.model_utils import compute_pckh_dataset
 
 """
 TODO:
@@ -299,26 +294,8 @@ def main(args):
         # Save checkpoint
         if (epoch + 1) % config_training['save_freq'] == 0:
             # save model only when pckh improved
-            pckh_2d = []
-            pckh_3d = []
-            for batch in val_dataloader:
-                pred_heatmaps, pred_z_coords = model(batch['image'])
-                #### debug device issue here
-                np_pred_heatmaps = pred_heatmaps.cpu().detach().numpy()
-                np_pred_z_coords = pred_z_coords.cpu().detach().numpy()
-                
-                image_height = batch['image'].shape[2]
-                image_width = batch['image'].shape[3]
-                image_size = (image_height, image_width)
-                
-                # Extract keypoints, scaling to the image size
-                pred_keypoints_batch = get_keypoints_from_heatmaps_batch(np_pred_heatmaps, image_size)
-                target_keypoints_batch = batch['2d_keypoints'].cpu().detach().numpy()
-                target_z_coords = batch['z_coords'].cpu().detach().numpy()
-
-                pckh_2d.append(compute_pckh_batch(pred_keypoints_batch, target_keypoints_batch))
-                pckh_3d.append(compute_pckh_z_batch(np_pred_z_coords, target_z_coords, target_keypoints_batch))
-            print(f"Epoch {epoch+1} - PCKh (2D): {np.mean(pckh_2d):.4f}, PCKh (3D): {np.mean(pckh_3d):.4f}")
+            pckh_2d, pckh_3d = compute_pckh_dataset(model, config_dataset['val_images_dir'], config_dataset['val_annotation_json'], config_model['model_name'], device)
+            print(f"Epoch {epoch+1} - PCKh (2D): {pckh_2d:.4f}, PCKh (3D): {pckh_3d:.4f}")
 
             # save model only when either 2d or 3d pckh improved
             if np.mean(pckh_2d) > best_pckh_2d or np.mean(pckh_3d) > best_pckh_3d:
@@ -335,10 +312,10 @@ def main(args):
                 print(f"Saved best model to {checkpoint_path}")
             
             # update best pckh scores
-            if np.mean(pckh_2d) > best_pckh_2d:
-                best_pckh_2d = np.mean(pckh_2d)
-            if np.mean(pckh_3d) > best_pckh_3d:
-                best_pckh_3d = np.mean(pckh_3d)
+            if pckh_2d > best_pckh_2d:
+                best_pckh_2d = pckh_2d
+            if pckh_3d > best_pckh_3d:
+                best_pckh_3d = pckh_3d
     
     # Save final model
     checkpoint_path = os.path.join(config_training['checkpoint_dir'], 'final_model.pth')
