@@ -1,5 +1,6 @@
 from enum import Enum
 import numpy as np
+from pycocotools.coco import COCO
 
 com_weights = np.array([
         0.081,
@@ -181,3 +182,10 @@ def visualize_pose(image, keypoints, depths=None, threshold=0.5, figsize=(12, 12
     
     plt.axis('off')
     return fig
+
+def read_annotation(annotation_path):
+    coco = COCO(annotation_path)
+    img_ids = coco.getImgIds()
+    img_info = coco.loadImgs(img_ids)
+    anns = coco.loadAnns(coco.getAnnIds(imgIds=img_ids))
+    return img_info, anns

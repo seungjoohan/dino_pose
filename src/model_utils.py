@@ -1,7 +1,10 @@
 import numpy as np
 import torch
 import torch.nn as nn
-from src.utils import KeyPoints, com_weights, KeyPointConnections
+from PIL import Image
+import os
+from transformers import AutoImageProcessor
+from src.utils import KeyPoints, com_weights, KeyPointConnections, read_annotation
 
 def argmax_ind(heatmap):
     """
@@ -89,6 +92,24 @@ def compute_pckh_batch(pred_keypoints_batch, target_keypoints_batch, threshold_r
         entry_pckh.append(compute_pckh(pred_kps, target_kps, threshold_ratio))
     
     return np.mean(entry_pckh)
+
+def compute_pckh_dataset(model, image_dir, annotation_path, model_name, device, threshold_ratio=0.5):
+    img_info, anns = read_annotation(annotation_path)
+    image_processor = AutoImageProcessor.from_pretrained(model_name)
+    pckh_2d = []
+    pckh_3d = []
+    for i, idx in enumerate(img_info):
+        img_path = os.path.join(image_dir, f"{idx['file_name']}")
+        img = Image.open(img_path).convert("RGB")
+        inputs = image_processor(images=img, return_tensors="pt")
+        input = inputs.pixel_values.to(device)
+        heatmaps, z_coords = model(input)
+        pred_kps = get_keypoints_from_heatmaps(heatmaps.cpu().detach().numpy(), (224, 224))
+        target_kps = np.array(anns[i]['keypoints']).reshape(-1, 3)
+        target_z_coords = np.array(anns[i]['keypoints_z'])
+        pckh_2d.append(compute_pckh(np.array(pred_kps), target_kps, threshold_ratio))
+        pckh_3d.append(compute_pckh_z(z_coords.cpu().detach().numpy(), target_z_coords, target_kps, threshold_ratio))
+    return np.mean(pckh_2d), np.mean(pckh_3d)
 
 def compute_pckh_z_batch(pred_z_coords_batch, target_z_coords_batch, target_keypoints_batch, threshold=0.5):
     """
