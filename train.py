@@ -291,6 +291,20 @@ def main(args):
                     'config_preproc': config_preproc
                 }, checkpoint_path)
                 print(f"Saved checkpoint to {checkpoint_path}")
+
+        if (epoch + 1) % 20 == 0:
+            # save model
+            checkpoint_path = os.path.join(config_training['checkpoint_dir'], f'checkpoint_epoch_{epoch+1}.pth')
+            torch.save({
+                'epoch': epoch,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'train_loss': train_loss,
+                'config_model': config_model,
+                'config_training': config_training,
+                'config_preproc': config_preproc
+                }, checkpoint_path)
+            print(f"Checkpoint saved to {checkpoint_path}")
         
         # Save best model
         if (epoch + 1) % config_training['save_freq'] == 0:
@@ -300,7 +314,7 @@ def main(args):
 
             # save model only when either 2d or 3d pckh improved
             if np.mean(pckh_2d) > best_pckh_2d or np.mean(pckh_3d) > best_pckh_3d:
-                checkpoint_path = os.path.join(config_training['checkpoint_dir'], f'best_model.pth')
+                checkpoint_path = os.path.join(config_training['checkpoint_dir'], f'best_model_{epoch+1}.pth')
                 torch.save({
                     'epoch': epoch,
                     'model_state_dict': model.state_dict(),
