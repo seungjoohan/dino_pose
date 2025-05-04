@@ -31,9 +31,9 @@ def get_default_configs():
 
     config_training = {
         "batch_size": 12,
-        "learning_rate": 2e-3,
+        "learning_rate": 3e-3,
         "weight_decay": 1e-5,
-        "num_epochs": 100,
+        "num_epochs": 50,
         "multiprocessing_num": 4,
         "print_freq": 10,
         "save_freq": 5,
