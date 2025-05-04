@@ -12,11 +12,6 @@ from data_loader.data_loader import create_dataloaders
 from config.config import get_default_configs
 from src.model_utils import compute_pckh_dataset
 
-"""
-TODO:
-- check loss functions
-- add model loading from checkpoint
-"""
 
 def keypoint_loss(pred_heatmaps, target_heatmaps, confidence_mask):
     """
@@ -24,7 +19,7 @@ def keypoint_loss(pred_heatmaps, target_heatmaps, confidence_mask):
     """
     # adjust heatmaps to visible keypoints
     confidence_mask = (confidence_mask > 1).float()
-    expanded_mask = confidence_mask.unsqueeze(1).unsqueeze(2).expand_as(pred_heatmaps)
+    expanded_mask = confidence_mask.unsqueeze(2).unsqueeze(2).expand_as(pred_heatmaps)
     masked_pred = pred_heatmaps * expanded_mask
     masked_target = target_heatmaps * expanded_mask
     
@@ -224,6 +219,12 @@ def main(args):
         unfreeze_last_n_layers=config_model['unfreeze_last_n_layers'],
         heatmap_size=config_model['output_heatmap_size']
     )
+
+    # load model from checkpoint if specified
+    if config_model['load_model'].endswith('.pth'):
+        # load model from checkpoint
+        model_dict = torch.load(config_model['load_model'])
+        model.load_state_dict(model_dict['model_state_dict'])
     model.to(device)
     
     # Print model parameters    
@@ -249,8 +250,8 @@ def main(args):
     print("Starting training...")
     train_losses = []
     val_losses = []
-    best_pckh_2d = 0
-    best_pckh_3d = 0
+    best_pckh_2d, best_pckh_3d = compute_pckh_dataset(model, config_dataset['val_images_dir'], config_dataset['val_annotation_json'], config_model['model_name'], device)
+    print(f"Starting training with PCKh (2D): {best_pckh_2d:.4f}, PCKh (3D): {best_pckh_3d:.4f}")
     
     for epoch in range(config_training['num_epochs']):
         # Train
@@ -276,8 +277,8 @@ def main(args):
             # Update scheduler
             scheduler.step(val_loss)
             
-            # Save checkpoint
-            if (epoch + 1) % config_training['save_freq'] == 0:
+            # Save checkpoint 
+            if (epoch + 1) == config_training['save_freq'] // 2:
                 checkpoint_path = os.path.join(config_training['checkpoint_dir'], f'checkpoint_epoch_{epoch+1}.pth')
                 torch.save({
                     'epoch': epoch,
@@ -291,7 +292,7 @@ def main(args):
                 }, checkpoint_path)
                 print(f"Saved checkpoint to {checkpoint_path}")
         
-        # Save checkpoint
+        # Save best model
         if (epoch + 1) % config_training['save_freq'] == 0:
             # save model only when pckh improved
             pckh_2d, pckh_3d = compute_pckh_dataset(model, config_dataset['val_images_dir'], config_dataset['val_annotation_json'], config_model['model_name'], device)

@@ -68,10 +68,10 @@ class Dinov2PoseModel(nn.Module):
     def forward(self, pixel_values):
         """
         Args:
-            pixel_values: Input images (B, C, H, W)
+            pixel_values: Input images (B, C, W, H)
             
         Returns:
-            heatmaps: Predicted 2D heatmaps (B, height, width, num_keypoints) to match dataloader format
+            heatmaps: Predicted 2D heatmaps (B, num_keypoints, width, height)
             z_coords: Predicted z-coordinates (B, num_keypoints)
         """
         # Extract features using the backbone
@@ -89,15 +89,8 @@ class Dinov2PoseModel(nn.Module):
         heatmaps = self.heatmap_head(reshaped_features)  # [B, num_keypoints, 48, 48]
         
         # Apply softmax to convert to probability distributions
-        # Reshape to [B, num_keypoints, -1], apply softmax, then reshape back
-        batch_size, num_kp, h, w = heatmaps.size()
-        heatmaps_flat = heatmaps.reshape(batch_size, num_kp, -1)
-        heatmaps_flat = torch.softmax(heatmaps_flat, dim=2)
-        heatmaps = heatmaps_flat.reshape(batch_size, num_kp, h, w)
+        heatmaps = torch.softmax(heatmaps, dim=1)  # [B, num_keypoints, 48, 48]
         
-        # Transpose heatmaps to match dataloader format: [B, num_keypoints, H, W] -> [B, H, W, num_keypoints]
-        heatmaps = heatmaps.permute(0, 2, 3, 1)
-
         # Apply Z-coordinate head
         z_coords = self.z_head(features)  # [B, num_keypoints]
         

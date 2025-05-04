@@ -78,14 +78,14 @@ class PoseDataset(Dataset):
                 continue
 
             # Create Gaussian heatmap
-            yy, xx = np.ogrid[y_min:y_max, x_min:x_max]
+            xx, yy = np.ogrid[x_min:x_max, y_min:y_max]
             d2 = (xx - center_x) ** 2 + (yy - center_y) ** 2
             exponent = np.exp(-d2 / (2 * sigma ** 2))
-            heatmap[y_min:y_max, x_min:x_max, i] = np.maximum(heatmap[y_min:y_max, x_min:x_max, i], exponent)
+            heatmap[x_min:x_max, y_min:y_max, i] = np.maximum(heatmap[x_min:x_max, y_min:y_max, i], exponent)
 
         # Resize heatmap to target size
         heatmap = cv2.resize(heatmap, (target_size[0], target_size[1]), interpolation=cv2.INTER_CUBIC)
-
+        heatmap = np.transpose(heatmap, (2, 0, 1))
         return heatmap
     
     def get_z_coords(self, keypoints, keypoints_3d):
