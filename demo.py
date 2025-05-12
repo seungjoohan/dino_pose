@@ -40,7 +40,7 @@ def main():
     # Load and preprocess the image
     print(f"Processing image: {args.image}")
     image_processor = AutoImageProcessor.from_pretrained("facebook/dinov2-small")
-    image = Image.open(args.image)
+    image = Image.open(args.image).convert("RGB")
     inputs = image_processor(image, return_tensors="pt").to(device)
     
     # Create the model
