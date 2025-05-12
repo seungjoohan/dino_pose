@@ -31,7 +31,7 @@ def get_default_configs():
 
     config_training = {
         "batch_size": 12,
-        "learning_rate": 1e-3,
+        "learning_rate": 1e-4,
         "weight_decay": 1e-5,
         "num_epochs": 50,
         "multiprocessing_num": 4,
@@ -41,8 +41,8 @@ def get_default_configs():
     }
 
     config_model = {
-        "model_name": "facebook/dinov2-base",
-        "load_model": "dinov2_pose/final_model.pth",
+        "model_name": "facebook/dinov2-small",
+        "load_model": "",
         "num_keypoints": 24,
         "unfreeze_last_n_layers": 0,
         "output_heatmap_size": 48

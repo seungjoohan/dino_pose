@@ -29,8 +29,8 @@ def weighted_max_loc(heatmap, target_size=(224,224)):
     
     loc_x = np.sum((0.5 + np.arange(min_x, max_x)) * np.sum(cropped_heatmap, axis=0)) / np.sum(cropped_heatmap)
     loc_y = np.sum((0.5 + np.arange(min_y, max_y)) * np.sum(cropped_heatmap, axis=1)) / np.sum(cropped_heatmap)
-    loc_x = loc_x / heatmap.shape[0] * target_size[0]
-    loc_y = loc_y / heatmap.shape[1] * target_size[1]
+    loc_x = loc_x / heatmap.shape[1] * target_size[0]
+    loc_y = loc_y / heatmap.shape[0] * target_size[1]
 
     return loc_x, loc_y
 
