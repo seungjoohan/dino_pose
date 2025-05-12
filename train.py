@@ -278,20 +278,6 @@ def main(args):
             scheduler.step(val_loss)
             
             # Save checkpoint 
-            if (epoch + 1) == config_training['save_freq'] // 2:
-                checkpoint_path = os.path.join(config_training['checkpoint_dir'], f'checkpoint_epoch_{epoch+1}.pth')
-                torch.save({
-                    'epoch': epoch,
-                    'model_state_dict': model.state_dict(),
-                    'optimizer_state_dict': optimizer.state_dict(),
-                    'train_loss': train_loss,
-                    'val_loss': val_loss,
-                    'config_model': config_model,
-                    'config_training': config_training,
-                    'config_preproc': config_preproc
-                }, checkpoint_path)
-                print(f"Saved checkpoint to {checkpoint_path}")
-
         if (epoch + 1) % 20 == 0:
             # save model
             checkpoint_path = os.path.join(config_training['checkpoint_dir'], f'checkpoint_epoch_{epoch+1}.pth')
