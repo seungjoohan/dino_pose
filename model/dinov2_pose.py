@@ -22,9 +22,14 @@ class Dinov2PoseModel(nn.Module):
                 for param in self.dinov2backbone.encoder.layer[layer_idx].parameters():
                     param.requires_grad = True
             
-            # Also unfreeze layer normalization layers
-            for param in self.dinov2backbone.encoder.layernorm.parameters():
-                param.requires_grad = True
+            # Also unfreeze layer normalization layers in the last n layers
+            for i in range(1, unfreeze_last_n_layers + 1):
+                layer_idx = len(self.dinov2backbone.encoder.layer) - i
+                # Unfreeze both layer norms in each transformer block
+                for param in self.dinov2backbone.encoder.layer[layer_idx].norm1.parameters():
+                    param.requires_grad = True
+                for param in self.dinov2backbone.encoder.layer[layer_idx].norm2.parameters():
+                    param.requires_grad = True
 
         # Get backbone output features dimension
         self.feat_dim = self.dinov2backbone.config.hidden_size
