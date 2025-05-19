@@ -1,7 +1,5 @@
 import os
-import sys
 import argparse
-import time
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -9,19 +7,11 @@ from torch.optim.lr_scheduler import ReduceLROnPlateau
 import numpy as np
 import matplotlib.pyplot as plt
 from tqdm import tqdm
-import json
-
 from model.dinov2_pose import Dinov2PoseModel
 from data_loader.data_loader import create_dataloaders
 from config.config import get_default_configs
-from src.model_utils import compute_pckh_batch, compute_pckh_z_batch
+from src.model_utils import compute_pckh_dataset
 
-
-"""
-TODO:
-- check loss functions
-- add model loading from checkpoint
-"""
 
 def keypoint_loss(pred_heatmaps, target_heatmaps, confidence_mask):
     """
@@ -29,7 +19,7 @@ def keypoint_loss(pred_heatmaps, target_heatmaps, confidence_mask):
     """
     # adjust heatmaps to visible keypoints
     confidence_mask = (confidence_mask > 1).float()
-    expanded_mask = confidence_mask.unsqueeze(1).unsqueeze(2).expand_as(pred_heatmaps)
+    expanded_mask = confidence_mask.unsqueeze(2).unsqueeze(2).expand_as(pred_heatmaps)
     masked_pred = pred_heatmaps * expanded_mask
     masked_target = target_heatmaps * expanded_mask
     
@@ -51,17 +41,6 @@ def z_loss(pred_z, target_z, confidence_mask):
 def train_one_epoch(model, dataloader, device, optimizer, epoch, print_freq=10):
     """
     Train for one epoch
-    
-    Args:
-        model: Model to train
-        dataloader: DataLoader for training data
-        device: Device to train on
-        optimizer: Optimizer
-        epoch: Current epoch
-        print_freq: Frequency of printing training stats
-    
-    Returns:
-        avg_loss: Average loss for the epoch
     """
     model.train()
     running_loss = 0.0
@@ -101,13 +80,13 @@ def train_one_epoch(model, dataloader, device, optimizer, epoch, print_freq=10):
         # Update statistics
         running_loss += loss.item()
         running_keypoint_loss += kp_loss.item()
-        running_z_coords_loss += z_coords_loss.item()
+        running_z_coords_loss += z_coords_loss.item() * 0.1
         
         # Update progress bar
         progress_bar.set_postfix({
-            'loss': running_loss / (i + 1),
-            'kp_loss': running_keypoint_loss / (i + 1),
-            'z_coords_loss': running_z_coords_loss / (i + 1)
+            'loss': f"{running_loss / (i + 1):.6f}",
+            'kp_loss': f"{running_keypoint_loss / (i + 1):.6f}",
+            'z_coords_loss': f"{running_z_coords_loss / (i + 1):.6f}"
         })
     
     # Calculate average losses
@@ -163,13 +142,13 @@ def validate(model, dataloader, device):
             # Update statistics
             running_loss += loss.item()
             running_keypoint_loss += kp_loss.item()
-            running_z_coords_loss += z_coords_loss.item()
+            running_z_coords_loss += z_coords_loss.item() * 0.1
             
             # Update progress bar
             progress_bar.set_postfix({
-                'val_loss': running_loss / (i + 1),
-                'val_kp_loss': running_keypoint_loss / (i + 1),
-                'val_z_coords_loss': running_z_coords_loss / (i + 1)
+                'val_loss': f"{running_loss / (i + 1):.6f}",
+                'val_kp_loss': f"{running_keypoint_loss / (i + 1):.6f}",
+                'val_z_coords_loss': f"{running_z_coords_loss / (i + 1):.6f}"
             })
     
     # Calculate average losses
@@ -186,7 +165,7 @@ def main(args):
     config_dataset, config_training, config_preproc, config_model = get_default_configs()
     
     # Create checkpoint directory if it doesn't exist
-    os.makedirs(config_model['checkpoint_dir'], exist_ok=True)
+    os.makedirs(config_training['checkpoint_dir'], exist_ok=True)
     
     # Create dataloader
     print(f"Creating dataloader for {config_dataset['train_images_dir']}...")
@@ -229,7 +208,38 @@ def main(args):
         unfreeze_last_n_layers=config_model['unfreeze_last_n_layers'],
         heatmap_size=config_model['output_heatmap_size']
     )
+
+    # load model from checkpoint if specified
+    if config_model['load_model'].endswith('.pth'):
+        # load model from checkpoint
+        model_dict = torch.load(config_model['load_model'])
+        model.load_state_dict(model_dict['model_state_dict'])
     model.to(device)
+    
+    # Compile the model
+    try:
+        # Try to compile with the most optimized mode first
+        compiled_model = torch.compile(
+            model,
+            mode="max-autotune",  # Most aggressive optimization
+            fullgraph=True,       # Optimize the entire model graph
+            dynamic=True          # Handle dynamic shapes
+        )
+        print("Model compiled successfully with max-autotune mode")
+    except Exception as e:
+        print(f"Failed to compile with max-autotune: {e}")
+        try:
+            # Fall back to a more conservative mode
+            compiled_model = torch.compile(
+                model,
+                mode="reduce-overhead",  # More conservative optimization
+                fullgraph=True
+            )
+            print("Model compiled successfully with reduce-overhead mode")
+        except Exception as e:
+            print(f"Failed to compile model: {e}")
+            compiled_model = model
+            print("Using uncompiled model")
     
     # Print model parameters    
     print(f"Trainable parameters: {model.count_parameters():,}")
@@ -237,7 +247,7 @@ def main(args):
     
     # Create optimizer
     optimizer = optim.AdamW(
-        model.parameters(),
+        compiled_model.parameters(),
         lr=config_training['learning_rate'],
         weight_decay=config_training['weight_decay']
     )
@@ -247,22 +257,20 @@ def main(args):
         optimizer,
         mode='min',
         factor=0.5,
-        patience=5,
-        verbose=True
+        patience=5
     )
     
     # Training loop
     print("Starting training...")
     train_losses = []
     val_losses = []
-    best_val_loss = float('inf')
-    best_pckh_2d = 0
-    best_pckh_3d = 0
+    best_pckh_2d, best_pckh_3d = compute_pckh_dataset(model, config_dataset['val_images_dir'], config_dataset['val_annotation_json'], config_model['model_name'], device)
+    print(f"Starting training with PCKh (2D): {best_pckh_2d:.4f}, PCKh (3D): {best_pckh_3d:.4f}")
     
     for epoch in range(config_training['num_epochs']):
         # Train
         train_loss, train_kp_loss, train_z_loss = train_one_epoch(
-            model=model,
+            model=compiled_model,
             dataloader=train_dataloader,
             optimizer=optimizer,
             device=device,
@@ -274,7 +282,7 @@ def main(args):
         # Validate
         if val_dataloader:
             val_loss, val_kp_loss, val_z_loss = validate(
-                model=model,
+                model=compiled_model,
                 dataloader=val_dataloader,
                 device=device
             )
@@ -283,70 +291,52 @@ def main(args):
             # Update scheduler
             scheduler.step(val_loss)
             
-            # Save best model
-            if val_loss < best_val_loss:
-                best_val_loss = val_loss
-                checkpoint_path = os.path.join(config_training['checkpoint_dir'], 'best_model.pth')
+            # Save checkpoint 
+        if (epoch + 1) % 20 == 0:
+            # save model
+            checkpoint_path = os.path.join(config_training['checkpoint_dir'], f'checkpoint_epoch_{epoch+1}.pth')
+            torch.save({
+                'epoch': epoch,
+                'model_state_dict': compiled_model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'train_loss': train_loss,
+                'config_model': config_model,
+                'config_training': config_training,
+                'config_preproc': config_preproc
+                }, checkpoint_path)
+            print(f"Checkpoint saved to {checkpoint_path}")
+        
+        # Save best model
+        if (epoch + 1) % config_training['save_freq'] == 0:
+            # save model only when pckh improved
+            pckh_2d, pckh_3d = compute_pckh_dataset(model, config_dataset['val_images_dir'], config_dataset['val_annotation_json'], config_model['model_name'], device)
+            print(f"Epoch {epoch+1} - PCKh (2D): {pckh_2d:.4f}, PCKh (3D): {pckh_3d:.4f}")
+
+            # save model only when either 2d or 3d pckh improved
+            if np.mean(pckh_2d) > best_pckh_2d or np.mean(pckh_3d) > best_pckh_3d:
+                checkpoint_path = os.path.join(config_training['checkpoint_dir'], f'best_model_{epoch+1}.pth')
                 torch.save({
                     'epoch': epoch,
-                    'model_state_dict': model.state_dict(),
+                    'model_state_dict': compiled_model.state_dict(),
                     'optimizer_state_dict': optimizer.state_dict(),
                     'train_loss': train_loss,
-                    'val_loss': val_loss,
                     'config_model': config_model,
                     'config_training': config_training,
                     'config_preproc': config_preproc
                 }, checkpoint_path)
                 print(f"Saved best model to {checkpoint_path}")
-        
-        # Save checkpoint
-        if (epoch + 1) % config_training['save_freq'] == 0:
-            # save model only when pckh improved
-            pckh_2d = []
-            pckh_3d = []
-            for batch in val_dataloader:
-                pred_heatmaps, pred_z_coords = model(batch['image'])
-                np_pred_heatmaps = pred_heatmaps.cpu().detach().numpy()
-                np_pred_z_coords = pred_z_coords.cpu().detach().numpy()
-                
-                image_height = batch['image'].shape[2]
-                image_width = batch['image'].shape[3]
-                image_size = (image_height, image_width)
-                
-                # Extract keypoints, scaling to the image size
-                pred_keypoints_batch = get_keypoints_from_heatmaps_batch(np_pred_heatmaps, image_size)
-                target_keypoints_batch = batch['2d_keypoints'].cpu().detach().numpy()
-                target_z_coords = batch['z_coords'].cpu().detach().numpy()
-
-                pckh_2d.append(compute_pckh_batch(pred_keypoints_batch, target_keypoints_batch))
-                pckh_3d.append(compute_pckh_z_batch(np_pred_z_coords, target_z_coords, target_keypoints_batch))
-            print(f"Epoch {epoch+1} - PCKh (2D): {np.mean(pckh_2d):.4f}, PCKh (3D): {np.mean(pckh_3d):.4f}")
-
-            # save model only when either 2d or 3d pckh improved
-            if np.mean(pckh_2d) > best_pckh_2d or np.mean(pckh_3d) > best_pckh_3d:
-                checkpoint_path = os.path.join(config_training['checkpoint_dir'], f'checkpoint_epoch_{epoch+1}.pth')
-                torch.save({
-                    'epoch': epoch,
-                    'model_state_dict': model.state_dict(),
-                    'optimizer_state_dict': optimizer.state_dict(),
-                    'train_loss': train_loss,
-                    'config_model': config_model,
-                    'config_training': config_training,
-                    'config_preproc': config_preproc
-                }, checkpoint_path)
-                print(f"Saved checkpoint to {checkpoint_path}")
             
             # update best pckh scores
-            if np.mean(pckh_2d) > best_pckh_2d:
-                best_pckh_2d = np.mean(pckh_2d)
-            if np.mean(pckh_3d) > best_pckh_3d:
-                best_pckh_3d = np.mean(pckh_3d)
+            if pckh_2d > best_pckh_2d:
+                best_pckh_2d = pckh_2d
+            if pckh_3d > best_pckh_3d:
+                best_pckh_3d = pckh_3d
     
     # Save final model
     checkpoint_path = os.path.join(config_training['checkpoint_dir'], 'final_model.pth')
     torch.save({
         'epoch': config_training['num_epochs'],
-        'model_state_dict': model.state_dict(),
+        'model_state_dict': compiled_model.state_dict(),
         'optimizer_state_dict': optimizer.state_dict(),
         'train_loss': train_loss,
         'config_model': config_model,

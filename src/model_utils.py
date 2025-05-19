@@ -1,7 +1,10 @@
 import numpy as np
 import torch
 import torch.nn as nn
-from src.utils import KeyPoints, com_weights, KeyPointConnections
+from PIL import Image
+import os
+from transformers import AutoImageProcessor
+from src.utils import KeyPoints, com_weights, KeyPointConnections, read_annotation
 
 def argmax_ind(heatmap):
     """
@@ -16,7 +19,7 @@ def weighted_max_loc(heatmap, target_size=(224,224)):
     Compute the weighted maximum location of a heatmap
     """
     heatmap = np.squeeze(heatmap)
-    center_y, center_x, _ = argmax_ind(heatmap)
+    center_x, center_y, _ = argmax_ind(heatmap)
     padding = 2
     min_x = max(0, center_x - padding)
     max_x = min(heatmap.shape[1], center_x + padding + 1)  # +1 for inclusive range
@@ -26,8 +29,8 @@ def weighted_max_loc(heatmap, target_size=(224,224)):
     
     loc_x = np.sum((0.5 + np.arange(min_x, max_x)) * np.sum(cropped_heatmap, axis=0)) / np.sum(cropped_heatmap)
     loc_y = np.sum((0.5 + np.arange(min_y, max_y)) * np.sum(cropped_heatmap, axis=1)) / np.sum(cropped_heatmap)
-    loc_x = loc_x / heatmap.shape[1] * target_size[1]
-    loc_y = loc_y / heatmap.shape[0] * target_size[0]
+    loc_x = loc_x / heatmap.shape[1] * target_size[0]
+    loc_y = loc_y / heatmap.shape[0] * target_size[1]
 
     return loc_x, loc_y
 
@@ -36,14 +39,14 @@ def get_keypoints_from_heatmaps(heatmaps, target_size=(224, 224)):
     Extract keypoints from heatmaps and scale them to target image size
     """
     heatmaps = heatmaps.squeeze()
-    height, width, num_kp = heatmaps.shape
-    return [weighted_max_loc(heatmaps[:, :, idx], target_size) for idx in range(num_kp)]
+    num_kp, _, _ = heatmaps.shape
+    return [weighted_max_loc(heatmaps[idx, :, :], target_size) for idx in range(num_kp)]
     
 def get_keypoints_from_heatmaps_batch(heatmaps_batch, target_size=(224, 224)):
     """
     Process a batch of heatmaps to extract keypoint coordinates
     """
-    batch_size, height, width, num_kp = heatmaps_batch.shape
+    batch_size, _, _, _ = heatmaps_batch.shape
     return np.array([get_keypoints_from_heatmaps(heatmaps_batch[idx], target_size) for idx in range(batch_size)])
 
 def compute_pckh(pred_keypoints, target_keypoints, threshold_ratio=0.5):
@@ -75,20 +78,25 @@ def compute_pckh(pred_keypoints, target_keypoints, threshold_ratio=0.5):
 
     return correct_count / total_count if total_count > 0 else 0.0
 
-def compute_pckh_batch(pred_keypoints_batch, target_keypoints_batch, threshold_ratio=0.5):
-    """
-    Compute PCKh metric for a batch of keypoints
-    """
-    batch_size, num_kp = pred_keypoints_batch.shape[:2]
-    entry_pckh = []
-    
-    for b in range(batch_size):
-        target_kps = target_keypoints_batch[b]
-        pred_kps = pred_keypoints_batch[b]
 
-        entry_pckh.append(compute_pckh(pred_kps, target_kps, threshold_ratio))
-    
-    return np.mean(entry_pckh)
+def compute_pckh_dataset(model, image_dir, annotation_path, model_name, device, threshold_ratio=0.5):
+    img_info, anns = read_annotation(annotation_path)
+    image_processor = AutoImageProcessor.from_pretrained(model_name)
+    pckh_2d = []
+    pckh_3d = []
+    for i, idx in enumerate(img_info):
+        img_path = os.path.join(image_dir, f"{idx['file_name']}")
+        img = Image.open(img_path).convert("RGB")
+        width, height = img.size
+        inputs = image_processor(images=img, return_tensors="pt")
+        input = inputs.pixel_values.to(device)
+        heatmaps, z_coords = model(input)
+        pred_kps = get_keypoints_from_heatmaps(heatmaps.cpu().detach().numpy(), (width, height))
+        target_kps = np.array(anns[i]['keypoints']).reshape(-1, 3)
+        target_z_coords = np.array(anns[i]['keypoints_z'])
+        pckh_2d.append(compute_pckh(np.array(pred_kps), target_kps, threshold_ratio))
+        pckh_3d.append(compute_pckh_z(z_coords.cpu().detach().numpy(), target_z_coords, target_kps, threshold_ratio))
+    return np.mean(pckh_2d), np.mean(pckh_3d)
 
 def compute_pckh_z_batch(pred_z_coords_batch, target_z_coords_batch, target_keypoints_batch, threshold=0.5):
     """
@@ -164,8 +172,8 @@ def plot_keypoints(image, pred_heatmaps, keypoint_label=True, figsize=(12, 8)):
     ax.imshow(img_np)
     
     # Extract keypoints from heatmaps
-    image_height, image_width = img_np.shape[:2]
-    image_size = (image_height, image_width)
+    width, height = image.size
+    image_size = (width, height)
 
     pred_keypoints = get_keypoints_from_heatmaps(pred_heatmaps, image_size)
     
@@ -200,8 +208,8 @@ def plot_keypoints(image, pred_heatmaps, keypoint_label=True, figsize=(12, 8)):
         from_pt = pred_keypoints[from_idx]
         to_pt = pred_keypoints[to_idx]
         
-        if (0 <= from_pt[0] <= image_width and 0 <= from_pt[1] <= image_height and
-            0 <= to_pt[0] <= image_width and 0 <= to_pt[1] <= image_height):
+        if (0 <= from_pt[0] <= width and 0 <= from_pt[1] <= height and
+            0 <= to_pt[0] <= width and 0 <= to_pt[1] <= height):
             ax.plot([from_pt[0], to_pt[0]], [from_pt[1], to_pt[1]], 
                    color=link['color'], linewidth=2, alpha=0.7)
     

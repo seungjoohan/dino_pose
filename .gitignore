@@ -3,3 +3,6 @@
 *pycache*
 *test*
 *venv*
+
+# Model files
+dinov2_pose/*.pth
