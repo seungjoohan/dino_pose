@@ -7,10 +7,10 @@ def get_default_configs():
     Get default configurations for model, training, and preprocessing
     """
     config_dataset = {
-        "train_images_dir": "/Users/seungjuhan/Desktop/vifive/vifive_pose_estimation/test_data/pose_datasets/threeD/train/images",
-        "train_annotation_json": "/Users/seungjuhan/Desktop/vifive/vifive_pose_estimation/test_data/pose_datasets/threeD/train/annotation_3d_only_z.json",
-        "val_images_dir": "/Users/seungjuhan/Desktop/vifive/vifive_pose_estimation/test_data/pose_datasets/threeD/valid/images",
-        "val_annotation_json": "/Users/seungjuhan/Desktop/vifive/vifive_pose_estimation/test_data/pose_datasets/threeD/valid/annotation_3d_valid_only_z.json"
+        "train_images_dir": "/Users/seunghan/Desktop/vifive/vifive_pose_estimation/test_data/pose_datasets/threeD/train/images",
+        "train_annotation_json": "/Users/seunghan/Desktop/vifive/vifive_pose_estimation/test_data/pose_datasets/threeD/train/annotation_3d_only_z.json",
+        "val_images_dir": "/Users/seunghan/Desktop/vifive/vifive_pose_estimation/test_data/pose_datasets/threeD/valid/images",
+        "val_annotation_json": "/Users/seunghan/Desktop/vifive/vifive_pose_estimation/test_data/pose_datasets/threeD/valid/annotation_3d_valid_only_z.json"
     }
     
     config_preproc = {
@@ -32,19 +32,19 @@ def get_default_configs():
     config_training = {
         "batch_size": 12,
         "learning_rate": 1e-4,
-        "weight_decay": 1e-6,
-        "num_epochs": 30,
+        "weight_decay": 1e-5,
+        "num_epochs": 50,
         "multiprocessing_num": 4,
         "print_freq": 10,
         "save_freq": 5,
-        "checkpoint_dir": "checkpoints"
+        "checkpoint_dir": "dinov2_pose_small"
     }
 
     config_model = {
-        "model_name": "facebook/dinov2-base",
+        "model_name": "facebook/dinov2-small",
+        "load_model": "dinov2_pose_small/final_model.pth",
         "num_keypoints": 24,
-        "unfreeze_last_n_layers": 0,
-        "checkpoint_dir": "finetuned_dinov2_pose",
+        "unfreeze_last_n_layers": 1,
         "output_heatmap_size": 48
     }
     

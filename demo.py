@@ -15,9 +15,7 @@ def main():
                         help='Path to input image')
     parser.add_argument('--num_keypoints', type=int, default=24,
                         help='Number of keypoints to detect')
-    parser.add_argument('--model', type=str, default="facebook/dinov2-small",
-                        choices=["facebook/dinov2-small", "facebook/dinov2-base", 
-                                "facebook/dinov2-large", "facebook/dinov2-giant"],
+    parser.add_argument('--model', type=str, default="facebook/dinov2-base",
                         help='DINOv2 model variant to use')
     parser.add_argument('--output', type=str, default=None,
                         help='Path to save visualization output')
@@ -41,17 +39,27 @@ def main():
     
     # Load and preprocess the image
     print(f"Processing image: {args.image}")
-    image_processor = AutoImageProcessor.from_pretrained(args.model)
-    image = Image.open(args.image)
+    image_processor = AutoImageProcessor.from_pretrained("facebook/dinov2-small")
+    image = Image.open(args.image).convert("RGB")
     inputs = image_processor(image, return_tensors="pt").to(device)
     
     # Create the model
-    print(f"Loading DINOv2 pose model ({args.model}) with {args.num_keypoints} keypoints...")
-    model = Dinov2PoseModel(
-        num_keypoints=args.num_keypoints,
-        backbone=args.model,
-        heatmap_size=image_processor.crop_size['height']
-    )
+    if args.model.startswith("facebook"):
+        print(f"Loading DINOv2 pose model ({args.model}) with {args.num_keypoints} keypoints...")
+        model = Dinov2PoseModel(
+            num_keypoints=args.num_keypoints,
+            backbone=args.model,
+            heatmap_size=image_processor.crop_size['height']
+        )
+    else:
+        model_dict = torch.load(args.model)
+        model = Dinov2PoseModel(
+            num_keypoints=model_dict['config_model']['num_keypoints'],
+            backbone=model_dict['config_model']['model_name'],
+            heatmap_size=model_dict['config_model']['output_heatmap_size']
+        )
+        model.load_state_dict(model_dict['model_state_dict'])
+        model.eval()
     model.to(device)
     
     # Run inference
