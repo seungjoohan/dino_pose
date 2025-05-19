@@ -41,17 +41,6 @@ def z_loss(pred_z, target_z, confidence_mask):
 def train_one_epoch(model, dataloader, device, optimizer, epoch, print_freq=10):
     """
     Train for one epoch
-    
-    Args:
-        model: Model to train
-        dataloader: DataLoader for training data
-        device: Device to train on
-        optimizer: Optimizer
-        epoch: Current epoch
-        print_freq: Frequency of printing training stats
-    
-    Returns:
-        avg_loss: Average loss for the epoch
     """
     model.train()
     running_loss = 0.0
@@ -227,13 +216,38 @@ def main(args):
         model.load_state_dict(model_dict['model_state_dict'])
     model.to(device)
     
+    # Compile the model
+    try:
+        # Try to compile with the most optimized mode first
+        compiled_model = torch.compile(
+            model,
+            mode="max-autotune",  # Most aggressive optimization
+            fullgraph=True,       # Optimize the entire model graph
+            dynamic=True          # Handle dynamic shapes
+        )
+        print("Model compiled successfully with max-autotune mode")
+    except Exception as e:
+        print(f"Failed to compile with max-autotune: {e}")
+        try:
+            # Fall back to a more conservative mode
+            compiled_model = torch.compile(
+                model,
+                mode="reduce-overhead",  # More conservative optimization
+                fullgraph=True
+            )
+            print("Model compiled successfully with reduce-overhead mode")
+        except Exception as e:
+            print(f"Failed to compile model: {e}")
+            compiled_model = model
+            print("Using uncompiled model")
+    
     # Print model parameters    
     print(f"Trainable parameters: {model.count_parameters():,}")
     model.print_trainable_parameters()
     
     # Create optimizer
     optimizer = optim.AdamW(
-        model.parameters(),
+        compiled_model.parameters(),
         lr=config_training['learning_rate'],
         weight_decay=config_training['weight_decay']
     )
@@ -256,7 +270,7 @@ def main(args):
     for epoch in range(config_training['num_epochs']):
         # Train
         train_loss, train_kp_loss, train_z_loss = train_one_epoch(
-            model=model,
+            model=compiled_model,
             dataloader=train_dataloader,
             optimizer=optimizer,
             device=device,
@@ -268,7 +282,7 @@ def main(args):
         # Validate
         if val_dataloader:
             val_loss, val_kp_loss, val_z_loss = validate(
-                model=model,
+                model=compiled_model,
                 dataloader=val_dataloader,
                 device=device
             )
@@ -283,7 +297,7 @@ def main(args):
             checkpoint_path = os.path.join(config_training['checkpoint_dir'], f'checkpoint_epoch_{epoch+1}.pth')
             torch.save({
                 'epoch': epoch,
-                'model_state_dict': model.state_dict(),
+                'model_state_dict': compiled_model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
                 'train_loss': train_loss,
                 'config_model': config_model,
@@ -303,7 +317,7 @@ def main(args):
                 checkpoint_path = os.path.join(config_training['checkpoint_dir'], f'best_model_{epoch+1}.pth')
                 torch.save({
                     'epoch': epoch,
-                    'model_state_dict': model.state_dict(),
+                    'model_state_dict': compiled_model.state_dict(),
                     'optimizer_state_dict': optimizer.state_dict(),
                     'train_loss': train_loss,
                     'config_model': config_model,
@@ -322,7 +336,7 @@ def main(args):
     checkpoint_path = os.path.join(config_training['checkpoint_dir'], 'final_model.pth')
     torch.save({
         'epoch': config_training['num_epochs'],
-        'model_state_dict': model.state_dict(),
+        'model_state_dict': compiled_model.state_dict(),
         'optimizer_state_dict': optimizer.state_dict(),
         'train_loss': train_loss,
         'config_model': config_model,
