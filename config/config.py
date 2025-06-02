@@ -17,22 +17,22 @@ def get_default_configs():
         # "is_background_swap": False,
         "pre_crop": True,
         "is_scale": True,
-        "random_resize_min": 0.8,
-        "random_resize_max": 1.2,
+        "random_resize_min": 0.7,
+        "random_resize_max": 1.3,
         "is_rotate": True,
-        "rotate_min_degree": -40,
-        "rotate_max_degree": 40,
+        "rotate_min_degree": -45,
+        "rotate_max_degree": 45,
         "is_flipping": True,
         "is_resize_shortest_edge": True,
         "is_crop": True,
         "is_occultation": False,
-        "heatmap_std": 2.0
+        "heatmap_std": 1.5
     }
 
     config_training = {
-        "batch_size": 12,
-        "learning_rate": 1e-4,
-        "weight_decay": 1e-5,
+        "batch_size": 16,
+        "learning_rate": 5e-5,
+        "weight_decay": 1e-4,
         "num_epochs": 50,
         "multiprocessing_num": 4,
         "print_freq": 10,
@@ -42,9 +42,9 @@ def get_default_configs():
 
     config_model = {
         "model_name": "facebook/dinov2-small",
-        "load_model": "dinov2_pose_small/final_model.pth",
+        "load_model": "",
         "num_keypoints": 24,
-        "unfreeze_last_n_layers": 1,
+        "unfreeze_last_n_layers": 8,
         "output_heatmap_size": 48
     }
     

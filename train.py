@@ -12,6 +12,30 @@ from data_loader.data_loader import create_dataloaders
 from config.config import get_default_configs
 from src.model_utils import compute_pckh_dataset
 
+class DynamicLossWeighting:
+    def __init__(self, initial_weight=0.1, target_ratio=1.0, adjustment_rate=0.1):
+        self.weight = initial_weight
+        self.target_ratio = target_ratio
+        self.adjustment_rate = adjustment_rate
+        self.best_weight = initial_weight
+        self.best_val_loss = float('inf')
+        
+    def update(self, kp_loss, z_loss, is_validation=False):
+        if is_validation:
+            # Validation에서는 weight를 업데이트하지 않고 현재 weight 반환
+            return self.weight
+            
+        current_ratio = z_loss / (kp_loss + 1e-8)
+        if current_ratio > self.target_ratio:
+            self.weight *= (1 - self.adjustment_rate)
+        else:
+            self.weight *= (1 + self.adjustment_rate)
+        return self.weight
+    
+    def update_best_weight(self, val_loss):
+        if val_loss < self.best_val_loss:
+            self.best_val_loss = val_loss
+            self.best_weight = self.weight
 
 def keypoint_loss(pred_heatmaps, target_heatmaps, confidence_mask):
     """
@@ -20,11 +44,18 @@ def keypoint_loss(pred_heatmaps, target_heatmaps, confidence_mask):
     # adjust heatmaps to visible keypoints
     confidence_mask = (confidence_mask > 1).float()
     expanded_mask = confidence_mask.unsqueeze(2).unsqueeze(2).expand_as(pred_heatmaps)
-    masked_pred = pred_heatmaps * expanded_mask
-    masked_target = target_heatmaps * expanded_mask
+
+    diff = (pred_heatmaps - target_heatmaps) ** 2
+    weight = torch.exp(-diff.detach())
+    weighted_diff = weight * diff
+
+    masked_diff = weighted_diff * expanded_mask
+    return masked_diff.mean()
+    # masked_pred = pred_heatmaps * expanded_mask
+    # masked_target = target_heatmaps * expanded_mask
     
-    mse = torch.nn.MSELoss()
-    return mse(masked_pred, masked_target)
+    # mse = torch.nn.MSELoss()
+    # return mse(masked_pred, masked_target)
 
 def z_loss(pred_z, target_z, confidence_mask):
     """
@@ -35,59 +66,66 @@ def z_loss(pred_z, target_z, confidence_mask):
     z_pred = pred_z * confidence_mask
     z_target = target_z * confidence_mask
     
-    mse = torch.nn.MSELoss()
-    return mse(z_pred, z_target)
+    # mse = torch.nn.MSELoss()
+    # return mse(z_pred, z_target)
+    return torch.abs(z_pred - z_target).mean() # trying L1 loss
 
-def train_one_epoch(model, dataloader, device, optimizer, epoch, print_freq=10):
-    """
-    Train for one epoch
-    """
-    model.train()
+def train_one_epoch(model, dataloader, device, optimizer, loss_weighting, epoch, is_validation=False):
+    model.train() if not is_validation else model.eval()
     running_loss = 0.0
     running_keypoint_loss = 0.0
     running_z_coords_loss = 0.0
     
     progress_bar = tqdm(enumerate(dataloader), total=len(dataloader), 
-                      desc=f"Epoch {epoch+1} Training", leave=False)
+                      desc=f"{'Validation' if is_validation else f'Epoch {epoch+1} Training'}", 
+                      leave=False)
     
-    for i, batch in progress_bar:
-        # Move data to device
-        pixel_values = batch['image'].to(device)
-        heatmaps = batch['2d_heatmaps'].to(device)
-        kps = batch['2d_keypoints'].to(device)
-        z_coords = batch['z_coords'].to(device)
-        
-        # Zero the parameter gradients
-        optimizer.zero_grad()
-        
-        # Forward pass
-        pred_heatmaps, pred_z_coords = model(pixel_values)
-        
-        # Get the confidence mask
-        confidence_mask = kps[..., 2]
-        
-        # Compute losses
-        kp_loss = keypoint_loss(pred_heatmaps, heatmaps, confidence_mask)
-        z_coords_loss = z_loss(pred_z_coords, z_coords, confidence_mask)
-        
-        # Weighted combined loss
-        loss = kp_loss + 0.1 * z_coords_loss
-        
-        # Backward pass and optimize
-        loss.backward()
-        optimizer.step()
-        
-        # Update statistics
-        running_loss += loss.item()
-        running_keypoint_loss += kp_loss.item()
-        running_z_coords_loss += z_coords_loss.item() * 0.1
-        
-        # Update progress bar
-        progress_bar.set_postfix({
-            'loss': f"{running_loss / (i + 1):.6f}",
-            'kp_loss': f"{running_keypoint_loss / (i + 1):.6f}",
-            'z_coords_loss': f"{running_z_coords_loss / (i + 1):.6f}"
-        })
+    with torch.no_grad() if is_validation else torch.enable_grad():
+        for i, batch in progress_bar:
+            # Move data to device
+            pixel_values = batch['image'].to(device)
+            heatmaps = batch['2d_heatmaps'].to(device)
+            kps = batch['2d_keypoints'].to(device)
+            z_coords = batch['z_coords'].to(device)
+            
+            if not is_validation:
+                optimizer.zero_grad()
+            
+            pred_heatmaps, pred_z_coords = model(pixel_values)
+            
+            # Get the confidence mask
+            confidence_mask = kps[..., 2]
+            
+            # Compute losses
+            kp_loss = keypoint_loss(pred_heatmaps, heatmaps, confidence_mask)
+            z_coords_loss = z_loss(pred_z_coords, z_coords, confidence_mask)
+            
+            # Get current 2d & 3d lossweight
+            current_weight = loss_weighting.update(
+                kp_loss.item(), 
+                z_coords_loss.item(),
+                is_validation=is_validation
+            )
+            
+            # Compute weighted loss
+            loss = kp_loss + current_weight * z_coords_loss
+            
+            if not is_validation:
+                loss.backward()
+                optimizer.step()
+            
+            # Update statistics
+            running_loss += loss.item()
+            running_keypoint_loss += kp_loss.item()
+            running_z_coords_loss += z_coords_loss.item()
+            
+            # Update progress bar
+            progress_bar.set_postfix({
+                'loss': f"{running_loss / (i + 1):.6f}",
+                'kp_loss': f"{running_keypoint_loss / (i + 1):.6f}",
+                'z_coords_loss': f"{running_z_coords_loss / (i + 1):.6f}",
+                'weight': f"{current_weight:.4f}"
+            })
     
     # Calculate average losses
     avg_loss = running_loss / len(dataloader)
@@ -119,6 +157,7 @@ def validate(model, dataloader, device):
         progress_bar = tqdm(enumerate(dataloader), total=len(dataloader), 
                           desc=f"Validation", leave=False)
         
+        loss_weighting = DynamicLossWeighting()
         for i, batch in progress_bar:
             # Move data to device
             pixel_values = batch['image'].to(device)
@@ -136,13 +175,14 @@ def validate(model, dataloader, device):
             kp_loss = keypoint_loss(pred_heatmaps, heatmaps, confidence_mask)
             z_coords_loss = z_loss(pred_z_coords, z_coords, confidence_mask)
             
-            # Weighted combined loss
-            loss = kp_loss + 0.1 * z_coords_loss
+            # Update loss weight dynamically
+            weight = loss_weighting.update(kp_loss.item(), z_coords_loss.item(), is_validation=True)
+            loss = kp_loss + weight * z_coords_loss
             
             # Update statistics
             running_loss += loss.item()
             running_keypoint_loss += kp_loss.item()
-            running_z_coords_loss += z_coords_loss.item() * 0.1
+            running_z_coords_loss += z_coords_loss.item() * weight
             
             # Update progress bar
             progress_bar.set_postfix({
@@ -218,32 +258,26 @@ def main(args):
     
     # Compile the model
     try:
-        # Try to compile with the most optimized mode first
-        compiled_model = torch.compile(
-            model,
-            mode="max-autotune",  # Most aggressive optimization
-            fullgraph=True,       # Optimize the entire model graph
-            dynamic=True          # Handle dynamic shapes
-        )
-        print("Model compiled successfully with max-autotune mode")
-    except Exception as e:
-        print(f"Failed to compile with max-autotune: {e}")
-        try:
-            # Fall back to a more conservative mode
+        # compile model in optimized mode except for MPS device
+        if device.type == 'mps':
+            compiled_model = model
+            print("Using uncompiled model for MPS device")
+        else:
             compiled_model = torch.compile(
                 model,
-                mode="reduce-overhead",  # More conservative optimization
-                fullgraph=True
+                mode="max-autotune",
+                fullgraph=True,
+                dynamic=True
             )
-            print("Model compiled successfully with reduce-overhead mode")
-        except Exception as e:
-            print(f"Failed to compile model: {e}")
-            compiled_model = model
-            print("Using uncompiled model")
+            print("Model compiled successfully with max-autotune mode")
+    except Exception as e:
+        print(f"Failed to compile model: {e}")
+        compiled_model = model
+        print("Using uncompiled model")
     
     # Print model parameters    
     print(f"Trainable parameters: {model.count_parameters():,}")
-    model.print_trainable_parameters()
+    # model.print_trainable_parameters()
     
     # Create optimizer
     optimizer = optim.AdamW(
@@ -258,6 +292,13 @@ def main(args):
         mode='min',
         factor=0.5,
         patience=5
+    )
+    
+    # Initialize loss weighting
+    loss_weighting = DynamicLossWeighting(
+        initial_weight=0.1,
+        target_ratio=1.0,
+        adjustment_rate=0.1
     )
     
     # Training loop
@@ -275,23 +316,30 @@ def main(args):
             optimizer=optimizer,
             device=device,
             epoch=epoch,
-            print_freq=config_training['print_freq']
+            loss_weighting=loss_weighting,
+            is_validation=False
         )
         train_losses.append(train_loss)
         
-        # Validate
+        # Validation
         if val_dataloader:
-            val_loss, val_kp_loss, val_z_loss = validate(
+            val_loss, val_kp_loss, val_z_loss = train_one_epoch(
                 model=compiled_model,
                 dataloader=val_dataloader,
-                device=device
+                device=device,
+                optimizer=optimizer,
+                epoch=epoch,
+                loss_weighting=loss_weighting,
+                is_validation=True
             )
             val_losses.append(val_loss)
             
             # Update scheduler
             scheduler.step(val_loss)
+            # Update best weight based on validation loss
+            loss_weighting.update_best_weight(val_loss)
             
-            # Save checkpoint 
+        # Save checkpoint
         if (epoch + 1) % 20 == 0:
             # save model
             checkpoint_path = os.path.join(config_training['checkpoint_dir'], f'checkpoint_epoch_{epoch+1}.pth')
@@ -300,6 +348,8 @@ def main(args):
                 'model_state_dict': compiled_model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
                 'train_loss': train_loss,
+                'valid_loss': val_loss,
+                'loss_weight': loss_weighting.best_weight,
                 'config_model': config_model,
                 'config_training': config_training,
                 'config_preproc': config_preproc
@@ -320,6 +370,8 @@ def main(args):
                     'model_state_dict': compiled_model.state_dict(),
                     'optimizer_state_dict': optimizer.state_dict(),
                     'train_loss': train_loss,
+                    'valid_loss': val_loss,
+                    'loss_weight': loss_weighting.best_weight,
                     'config_model': config_model,
                     'config_training': config_training,
                     'config_preproc': config_preproc
@@ -339,6 +391,8 @@ def main(args):
         'model_state_dict': compiled_model.state_dict(),
         'optimizer_state_dict': optimizer.state_dict(),
         'train_loss': train_loss,
+        'valid_loss': val_loss,
+        'loss_weight': loss_weighting.best_weight,
         'config_model': config_model,
         'config_training': config_training,
         'config_preproc': config_preproc
