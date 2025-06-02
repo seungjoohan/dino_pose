@@ -30,9 +30,9 @@ def get_default_configs():
     }
 
     config_training = {
-        "batch_size": 16,
-        "learning_rate": 5e-5,
-        "weight_decay": 1e-4,
+        "batch_size": 32,
+        "learning_rate": 1e-5,
+        "weight_decay": 5e-7,
         "num_epochs": 50,
         "multiprocessing_num": 4,
         "print_freq": 10,
@@ -45,6 +45,10 @@ def get_default_configs():
         "load_model": "",
         "num_keypoints": 24,
         "unfreeze_last_n_layers": 8,
+        "use_lora": True,
+        "lora_rank": 8,
+        "lora_alpha": 16,
+        "lora_dropout": 0.1,
         "output_heatmap_size": 48
     }
     

@@ -7,7 +7,7 @@ from torch.optim.lr_scheduler import ReduceLROnPlateau
 import numpy as np
 import matplotlib.pyplot as plt
 from tqdm import tqdm
-from model.dinov2_pose import Dinov2PoseModel
+from model.dinov2_pose import Dinov2PoseModel, Dinov2PoseModelLoRA
 from data_loader.data_loader import create_dataloaders
 from config.config import get_default_configs
 from src.model_utils import compute_pckh_dataset
@@ -131,8 +131,11 @@ def train_one_epoch(model, dataloader, device, optimizer, loss_weighting, epoch,
     avg_loss = running_loss / len(dataloader)
     avg_keypoint_loss = running_keypoint_loss / len(dataloader)
     avg_z_coords_loss = running_z_coords_loss / len(dataloader)
-    
-    print(f"Epoch {epoch+1} - Loss: {avg_loss:.4f}, Keypoint Loss: {avg_keypoint_loss:.4f}, 3D Loss: {avg_z_coords_loss:.4f}")
+
+    if is_validation:
+        print(f"Validation - Loss: {avg_loss:.4f}, Keypoint Loss: {avg_keypoint_loss:.4f}, 3D Loss: {avg_z_coords_loss:.4f}")
+    else:
+        print(f"Epoch {epoch+1} - Loss: {avg_loss:.4f}, Keypoint Loss: {avg_keypoint_loss:.4f}, 3D Loss: {avg_z_coords_loss:.4f}")
     
     return avg_loss, avg_keypoint_loss, avg_z_coords_loss
 
@@ -242,12 +245,22 @@ def main(args):
     
     # Create model
     print(f"Creating model {config_model['model_name']}...")
-    model = Dinov2PoseModel(
-        num_keypoints=config_model['num_keypoints'],
-        backbone=config_model['model_name'],
-        unfreeze_last_n_layers=config_model['unfreeze_last_n_layers'],
-        heatmap_size=config_model['output_heatmap_size']
-    )
+    if config_model['use_lora']:
+        model = Dinov2PoseModelLoRA(
+            num_keypoints=config_model['num_keypoints'],
+            backbone=config_model['model_name'],
+            heatmap_size=config_model['output_heatmap_size'],
+            lora_rank=config_model['lora_rank'],
+            lora_alpha=config_model['lora_alpha'],
+            lora_dropout=config_model['lora_dropout']
+        )
+    else:
+        model = Dinov2PoseModel(
+            num_keypoints=config_model['num_keypoints'],
+            backbone=config_model['model_name'],
+            unfreeze_last_n_layers=config_model['unfreeze_last_n_layers'],
+            heatmap_size=config_model['output_heatmap_size']
+        )
 
     # load model from checkpoint if specified
     if config_model['load_model'].endswith('.pth'):
