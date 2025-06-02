@@ -1,12 +1,14 @@
 import os
 import argparse
+import numpy as np
+import matplotlib.pyplot as plt
+from tqdm import tqdm
+import time
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.optim.lr_scheduler import ReduceLROnPlateau
-import numpy as np
-import matplotlib.pyplot as plt
-from tqdm import tqdm
 from model.dinov2_pose import Dinov2PoseModel, Dinov2PoseModelLoRA
 from data_loader.data_loader import create_dataloaders
 from config.config import get_default_configs
@@ -71,6 +73,7 @@ def z_loss(pred_z, target_z, confidence_mask):
     return torch.abs(z_pred - z_target).mean() # trying L1 loss
 
 def train_one_epoch(model, dataloader, device, optimizer, loss_weighting, epoch, is_validation=False):
+    start_time = time.time()
     model.train() if not is_validation else model.eval()
     running_loss = 0.0
     running_keypoint_loss = 0.0
@@ -132,10 +135,12 @@ def train_one_epoch(model, dataloader, device, optimizer, loss_weighting, epoch,
     avg_keypoint_loss = running_keypoint_loss / len(dataloader)
     avg_z_coords_loss = running_z_coords_loss / len(dataloader)
 
+    end_time = time.time()
+
     if is_validation:
         print(f"Validation - Loss: {avg_loss:.4f}, Keypoint Loss: {avg_keypoint_loss:.4f}, 3D Loss: {avg_z_coords_loss:.4f}")
     else:
-        print(f"Epoch {epoch+1} - Loss: {avg_loss:.4f}, Keypoint Loss: {avg_keypoint_loss:.4f}, 3D Loss: {avg_z_coords_loss:.4f}")
+        print(f"Epoch {epoch+1} - Loss: {avg_loss:.4f}, Keypoint Loss: {avg_keypoint_loss:.4f}, 3D Loss: {avg_z_coords_loss:.4f}, Elapsed Time: {end_time - start_time:.2f}s")
     
     return avg_loss, avg_keypoint_loss, avg_z_coords_loss
 
