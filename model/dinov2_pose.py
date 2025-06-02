@@ -46,28 +46,30 @@ class Dinov2PoseModel(nn.Module):
         self.heatmap_head = nn.Sequential(
             # Input: [B, 256, 6, 6]
             
-            nn.ConvTranspose2d(256, 128, kernel_size=3, stride=2, padding=1, output_padding=1),  # [B, 128, 12, 12]
+            nn.ConvTranspose2d(256, 256, kernel_size=3, stride=2, padding=1, output_padding=1),  # [B, 128, 12, 12]
+            nn.BatchNorm2d(256),
+            nn.ReLU(),
+            
+            nn.ConvTranspose2d(256, 128, kernel_size=3, stride=2, padding=1, output_padding=1),   # [B, 64, 24, 24]
             nn.BatchNorm2d(128),
             nn.ReLU(),
             
-            nn.ConvTranspose2d(128, 64, kernel_size=3, stride=2, padding=1, output_padding=1),   # [B, 64, 24, 24]
+            nn.ConvTranspose2d(128, 64, kernel_size=3, stride=2, padding=1, output_padding=1),    # [B, 32, 48, 48]
             nn.BatchNorm2d(64),
             nn.ReLU(),
             
-            nn.ConvTranspose2d(64, 32, kernel_size=3, stride=2, padding=1, output_padding=1),    # [B, 32, 48, 48]
-            nn.BatchNorm2d(32),
-            nn.ReLU(),
-            
-            nn.Conv2d(32, num_keypoints, kernel_size=1)  # [B, num_keypoints, 48, 48]
+            nn.Conv2d(64, num_keypoints, kernel_size=1)  # [B, num_keypoints, 48, 48]
         )
         
         # Z-coordinate head
         self.z_head = nn.Sequential(
-            nn.Linear(self.feat_dim, 512),
+            nn.Linear(self.feat_dim, 1024),
             nn.ReLU(),
-            nn.Linear(512, 256),
+            nn.Dropout(0.2),
+            nn.Linear(1024, 512),
             nn.ReLU(),
-            nn.Linear(256, num_keypoints)
+            nn.Dropout(0.2),
+            nn.Linear(512, num_keypoints)
         )
     
     def forward(self, pixel_values):
