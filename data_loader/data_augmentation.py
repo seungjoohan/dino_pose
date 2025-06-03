@@ -145,7 +145,24 @@ def pose_resize_shortestedge(image, keypoints, z_coords, target_size, processor)
     else:
         newh, neww = int(scale * image.size[1] + 0.5), target_size
     resized_img = image.resize((neww, newh))
-    model_input_size = (processor.crop_size['width'], processor.crop_size['height'])
+    
+    # Get model input size from processor
+    if hasattr(processor, 'crop_size'):
+        # For DINOv2 and similar processors
+        model_input_size = (processor.crop_size['width'], processor.crop_size['height'])
+    elif hasattr(processor, 'size'):
+        # For some other processors
+        if isinstance(processor.size, dict):
+            model_input_size = (processor.size.get('width', 224), processor.size.get('height', 224))
+        else:
+            model_input_size = (processor.size, processor.size)
+    elif hasattr(processor, 'data_config') and processor.data_config:
+        # For TimmWrapperImageProcessor (FastViT)
+        input_size = processor.data_config.get('input_size', (3, 224, 224))
+        model_input_size = (input_size[2], input_size[1])  # (width, height)
+    else:
+        # Fallback default
+        model_input_size = (224, 224)
 
     # add padding if result image is smaller than model input size to make it at least model input size
     pw = ph = 0

@@ -5,6 +5,7 @@ from PIL import Image
 import os
 from transformers import AutoImageProcessor
 from src.utils import KeyPoints, com_weights, KeyPointConnections, read_annotation
+from model.model_utils import resolve_model_name
 
 def argmax_ind(heatmap):
     """
@@ -80,10 +81,14 @@ def compute_pckh(pred_keypoints, target_keypoints, threshold_ratio=0.5):
 
 
 def compute_pckh_dataset(model, image_dir, annotation_path, model_name, device, threshold_ratio=0.5):
+    print(f"Loading dataset to evaluate model performance...")
     img_info, anns = read_annotation(annotation_path)
-    image_processor = AutoImageProcessor.from_pretrained(model_name)
+    # Resolve model name (family name -> actual HuggingFace model name)
+    actual_model_name = resolve_model_name(model_name)
+    image_processor = AutoImageProcessor.from_pretrained(actual_model_name)
     pckh_2d = []
     pckh_3d = []
+    print(f"Computing PCKh for {len(img_info)} images...")
     for i, idx in enumerate(img_info):
         img_path = os.path.join(image_dir, f"{idx['file_name']}")
         img = Image.open(img_path).convert("RGB")
