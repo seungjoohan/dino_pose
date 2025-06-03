@@ -251,6 +251,7 @@ def main(args):
     # Create model
     print(f"Creating model {config_model['model_name']}...")
     if config_model['use_lora']:
+        print("Using LoRA model")
         model = Dinov2PoseModelLoRA(
             num_keypoints=config_model['num_keypoints'],
             backbone=config_model['model_name'],
@@ -260,6 +261,7 @@ def main(args):
             lora_dropout=config_model['lora_dropout']
         )
     else:
+        print("Using original model")
         model = Dinov2PoseModel(
             num_keypoints=config_model['num_keypoints'],
             backbone=config_model['model_name'],
