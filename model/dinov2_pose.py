@@ -127,6 +127,10 @@ class Dinov2PoseModelLoRA(nn.Module):
         self.heatmap_size = heatmap_size
         self.num_keypoints = num_keypoints
 
+        # Freeze backbone first
+        for param in self.dinov2backbone.parameters():
+            param.requires_grad = False
+
         # Apply LoRA to attention layers
         for i, layer in enumerate(self.dinov2backbone.encoder.layer):
             if i >= len(self.dinov2backbone.encoder.layer) - 1:
