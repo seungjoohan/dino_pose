@@ -1,42 +1,36 @@
 import torch
 import torch.nn as nn
-from transformers import AutoImageProcessor, Dinov2Model
+import timm
+from transformers import AutoImageProcessor
 from .lora import LoRAAttention
 from .base_pose import BasePoseModel
 from typing import Dict, Any
 
-class Dinov2PoseModel(BasePoseModel):
-    def __init__(self, num_keypoints=24, backbone="facebook/dinov2-base", unfreeze_last_n_layers=0, heatmap_size=48):
-        super(Dinov2PoseModel, self).__init__()
-        self.backbone = Dinov2Model.from_pretrained(backbone)
-        self.backbone_name = backbone
-        self.image_processor = AutoImageProcessor.from_pretrained(backbone)
+class FastVitPoseModel(BasePoseModel):
+    def __init__(self, num_keypoints=24, backbone="fastvit_t8.apple_in1k", heatmap_size=48):
+        super(FastVitPoseModel, self).__init__()
+        # Remove 'timm/' prefix if present
+        if backbone.startswith('timm/'):
+            backbone = backbone[5:]
+        
+        self.backbone_name = f"timm/{backbone}"  # Keep original name for compatibility
         self.heatmap_size = heatmap_size
         self.num_keypoints = num_keypoints
-
+        
+        # Load FastViT backbone directly from timm
+        self.backbone = timm.create_model(backbone, pretrained=True, num_classes=0)  # num_classes=0 for feature extraction
+        
+        # Get model configuration for image preprocessing
+        self.backbone_config = self.backbone.default_cfg
+        self.input_size = self.backbone_config.get('input_size', (3, 224, 224))
+        self.image_size = self.input_size[1]  # Assuming square images
+        
         # Freeze backbone
         for param in self.backbone.parameters():
             param.requires_grad = False
-            
-        # Optionally unfreeze some layers for fine-tuning
-        if unfreeze_last_n_layers > 0:
-            # Unfreeze the last n transformer layers
-            for i in range(1, unfreeze_last_n_layers + 1):
-                layer_idx = len(self.backbone.encoder.layer) - i
-                for param in self.backbone.encoder.layer[layer_idx].parameters():
-                    param.requires_grad = True
-            
-            # Also unfreeze layer normalization layers in the last n layers
-            for i in range(1, unfreeze_last_n_layers + 1):
-                layer_idx = len(self.backbone.encoder.layer) - i
-                # Unfreeze both layer norms in each transformer block
-                for param in self.backbone.encoder.layer[layer_idx].norm1.parameters():
-                    param.requires_grad = True
-                for param in self.backbone.encoder.layer[layer_idx].norm2.parameters():
-                    param.requires_grad = True
-
+        
         # Get backbone output features dimension
-        self.feat_dim = self.backbone.config.hidden_size
+        self.feat_dim = self._get_feature_dim()
         
         # Project features to a 3D volume that can be upsampled to heatmaps
         self.feature_projection = nn.Sequential(
@@ -49,16 +43,15 @@ class Dinov2PoseModel(BasePoseModel):
         # Heatmap generation using transposed convolutions
         self.heatmap_head = nn.Sequential(
             # Input: [B, 256, 6, 6]
-            
-            nn.ConvTranspose2d(256, 256, kernel_size=3, stride=2, padding=1, output_padding=1),  # [B, 128, 12, 12]
+            nn.ConvTranspose2d(256, 256, kernel_size=3, stride=2, padding=1, output_padding=1),  # [B, 256, 12, 12]
             nn.BatchNorm2d(256),
             nn.ReLU(),
             
-            nn.ConvTranspose2d(256, 128, kernel_size=3, stride=2, padding=1, output_padding=1),   # [B, 64, 24, 24]
+            nn.ConvTranspose2d(256, 128, kernel_size=3, stride=2, padding=1, output_padding=1),   # [B, 128, 24, 24]
             nn.BatchNorm2d(128),
             nn.ReLU(),
             
-            nn.ConvTranspose2d(128, 64, kernel_size=3, stride=2, padding=1, output_padding=1),    # [B, 32, 48, 48]
+            nn.ConvTranspose2d(128, 64, kernel_size=3, stride=2, padding=1, output_padding=1),    # [B, 64, 48, 48]
             nn.BatchNorm2d(64),
             nn.ReLU(),
             
@@ -82,22 +75,32 @@ class Dinov2PoseModel(BasePoseModel):
         return cls(
             num_keypoints=config['num_keypoints'],
             backbone=model_name,
-            unfreeze_last_n_layers=config.get('unfreeze_last_n_layers', 0),
             heatmap_size=config['output_heatmap_size']
         )
+    
+    def _get_feature_dim(self):
+        """Get the feature dimension from backbone output"""
+        with torch.no_grad():
+            dummy_input = torch.randn(1, *self.input_size)
+            try:
+                features = self.backbone(dummy_input)
+                return features.shape[-1]
+            except Exception as e:
+                print(f"Warning: Could not auto-detect feature dimension: {e}")
+                print("Using default feature dimension of 768")
+                return 768
     
     def forward(self, pixel_values):
         """
         Args:
-            pixel_values: Input images (B, C, W, H)
+            pixel_values: Input images (B, C, H, W)
             
         Returns:
-            heatmaps: Predicted 2D heatmaps (B, num_keypoints, width, height)
+            heatmaps: Predicted 2D heatmaps (B, num_keypoints, height, width)
             z_coords: Predicted z-coordinates (B, num_keypoints)
         """
-        # Extract features using the backbone
-        outputs = self.backbone(pixel_values)
-        features = outputs.last_hidden_state[:, 0, :]
+        # Extract features using the timm backbone (returns [B, feat_dim])
+        features = self.backbone(pixel_values)
         
         # Project features to 3D volume for heatmap generation
         projected_features = self.feature_projection(features)  # [B, 6*6*256]
@@ -113,50 +116,53 @@ class Dinov2PoseModel(BasePoseModel):
         z_coords = self.z_head(features)  # [B, num_keypoints]
         
         return heatmaps, z_coords
-        
+
     def count_parameters(self, trainable_only=True):
-        """
-        Count the number of parameters in the model
-        """
+        """Count the number of parameters in the model"""
         if trainable_only:
             return sum(p.numel() for p in self.parameters() if p.requires_grad)
         else:
             return sum(p.numel() for p in self.parameters())
             
     def print_trainable_parameters(self):
-        """
-        Print the names of trainable parameters
-        """
+        """Print the names of trainable parameters"""
         for name, param in self.named_parameters():
             if param.requires_grad:
                 print(f"Trainable: {name}, Shape: {param.shape}, Parameters: {param.numel():,}")
-        
-class Dinov2PoseModelLoRA(BasePoseModel):
-    def __init__(self, num_keypoints=24, backbone="facebook/dinov2-base", heatmap_size=48,
+
+class FastVitPoseModelLoRA(BasePoseModel):
+    """
+    TODO: FASTViT LoRA - check if LoRAAttention is compatible with timm model
+    """
+    def __init__(self, num_keypoints=24, backbone="fastvit_t8.apple_in1k", heatmap_size=48,
                  lora_rank=8, lora_alpha=16, lora_dropout=0.1):
-        super(Dinov2PoseModelLoRA, self).__init__()
-        self.backbone = Dinov2Model.from_pretrained(backbone)
-        self.backbone_name = backbone
-        self.image_processor = AutoImageProcessor.from_pretrained(backbone)
+        super(FastVitPoseModelLoRA, self).__init__()
+        # Remove 'timm/' prefix if present
+        if backbone.startswith('timm/'):
+            backbone = backbone[5:]
+        
+        self.backbone_name = f"timm/{backbone}"  # Keep original name for compatibility
         self.heatmap_size = heatmap_size
         self.num_keypoints = num_keypoints
-
-        # Freeze backbone first
+        
+        # Load FastViT backbone directly from timm
+        self.backbone = timm.create_model(backbone, pretrained=True, num_classes=0)  # num_classes=0 for feature extraction
+        
+        # Get model configuration for image preprocessing
+        self.backbone_config = self.backbone.default_cfg
+        self.input_size = self.backbone_config.get('input_size', (3, 224, 224))
+        self.image_size = self.input_size[1]  # Assuming square images
+        
+        # Freeze backbone
         for param in self.backbone.parameters():
             param.requires_grad = False
-
-        # Apply LoRA to attention layers
-        for i, layer in enumerate(self.backbone.encoder.layer):
-            if i >= len(self.backbone.encoder.layer) - 1:
-                layer.attention = LoRAAttention(
-                    layer.attention, 
-                    r=lora_rank, 
-                    alpha=lora_alpha, 
-                    dropout=lora_dropout
-                )
-
+        
+        # TODO: Implement FastViT-specific LoRA for RepMixer blocks
+        # FastViT uses RepMixer blocks instead of traditional attention
+        # Current LoRA implementation is designed for attention layers
+        
         # Get backbone output features dimension
-        self.feat_dim = self.backbone.config.hidden_size
+        self.feat_dim = self._get_feature_dim()
         
         # Project features to a 3D volume that can be upsampled to heatmaps
         self.feature_projection = nn.Sequential(
@@ -169,16 +175,15 @@ class Dinov2PoseModelLoRA(BasePoseModel):
         # Heatmap generation using transposed convolutions
         self.heatmap_head = nn.Sequential(
             # Input: [B, 256, 6, 6]
-            
-            nn.ConvTranspose2d(256, 256, kernel_size=3, stride=2, padding=1, output_padding=1),  # [B, 128, 12, 12]
+            nn.ConvTranspose2d(256, 256, kernel_size=3, stride=2, padding=1, output_padding=1),  # [B, 256, 12, 12]
             nn.BatchNorm2d(256),
             nn.ReLU(),
             
-            nn.ConvTranspose2d(256, 128, kernel_size=3, stride=2, padding=1, output_padding=1),   # [B, 64, 24, 24]
+            nn.ConvTranspose2d(256, 128, kernel_size=3, stride=2, padding=1, output_padding=1),   # [B, 128, 24, 24]
             nn.BatchNorm2d(128),
             nn.ReLU(),
             
-            nn.ConvTranspose2d(128, 64, kernel_size=3, stride=2, padding=1, output_padding=1),    # [B, 32, 48, 48]
+            nn.ConvTranspose2d(128, 64, kernel_size=3, stride=2, padding=1, output_padding=1),    # [B, 64, 48, 48]
             nn.BatchNorm2d(64),
             nn.ReLU(),
             
@@ -208,18 +213,21 @@ class Dinov2PoseModelLoRA(BasePoseModel):
             lora_dropout=config.get('lora_dropout', 0.1)
         )
     
+    def _get_feature_dim(self):
+        """Get the feature dimension from backbone output"""
+        with torch.no_grad():
+            dummy_input = torch.randn(1, *self.input_size)
+            try:
+                features = self.backbone(dummy_input)
+                return features.shape[-1]
+            except Exception as e:
+                print(f"Warning: Could not auto-detect feature dimension: {e}")
+                print("Using default feature dimension of 768")
+                return 768
+    
     def forward(self, pixel_values):
-        """
-        Args:
-            pixel_values: Input images (B, C, W, H)
-            
-        Returns:
-            heatmaps: Predicted 2D heatmaps (B, num_keypoints, width, height)
-            z_coords: Predicted z-coordinates (B, num_keypoints)
-        """
-        # Extract features using the backbone
-        outputs = self.backbone(pixel_values)
-        features = outputs.last_hidden_state[:, 0, :]
+        # Extract features using the timm backbone (returns [B, feat_dim])
+        features = self.backbone(pixel_values)
         
         # Project features to 3D volume for heatmap generation
         projected_features = self.feature_projection(features)  # [B, 6*6*256]
@@ -235,28 +243,25 @@ class Dinov2PoseModelLoRA(BasePoseModel):
         z_coords = self.z_head(features)  # [B, num_keypoints]
         
         return heatmaps, z_coords
-        
+
     def count_parameters(self, trainable_only=True):
-        """
-        Count the number of parameters in the model
-        """
+        """Count the number of parameters in the model"""
         if trainable_only:
             return sum(p.numel() for p in self.parameters() if p.requires_grad)
         else:
             return sum(p.numel() for p in self.parameters())
-            
-    def print_trainable_parameters(self):
-        """
-        Print the names of trainable parameters
-        """
-        for name, param in self.named_parameters():
-            if param.requires_grad:
-                print(f"Trainable: {name}, Shape: {param.shape}, Parameters: {param.numel():,}")
-        
-    
-def __main__():
-    model = Dinov2PoseModelLoRA()
-    model.print_trainable_parameters()
-    
+
 if __name__ == "__main__":
-    __main__()
+    print("Testing FastViT models...")
+    
+    # Test standard model
+    print("=== Testing FastVitPoseModel ===")
+    model = FastVitPoseModel()
+    print(f"Standard model created successfully")
+    print(f"Trainable parameters: {model.count_parameters():,}")
+    
+    # Test LoRA model (will show warning)
+    print("\n=== Testing FastVitPoseModelLoRA ===")
+    model_lora = FastVitPoseModelLoRA()
+    print(f"LoRA model created successfully")
+    print(f"Trainable parameters: {model_lora.count_parameters():,}")

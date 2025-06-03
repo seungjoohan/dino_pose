@@ -9,6 +9,10 @@ from pycocotools.coco import COCO
 from PIL import Image
 from data_loader.data_augmentation import *
 from src.utils import com_weights
+from model.model_utils import resolve_model_name
+import timm
+from timm.data import resolve_data_config
+from timm.data.transforms_factory import create_transform
 
 
 
@@ -44,9 +48,15 @@ class PoseDataset(Dataset):
         return len(self.img_ids)
     
     def preprocess_image(self, image):
-        """Preprocess image for DINOv2 model input"""
+        """Preprocess image for model input"""
         inputs = self.image_processor(images=image, return_tensors="pt")
-        return inputs.pixel_values.squeeze(0)  
+        
+        # Handle both HuggingFace and custom processor outputs
+        if isinstance(inputs, dict):
+            return inputs["pixel_values"].squeeze(0)
+        else:
+            # Legacy HuggingFace format
+            return inputs.pixel_values.squeeze(0)
     
     def keypoints_to_heatmaps(self, image, keypoints, target_size, num_keypoints=24):
         """
@@ -201,8 +211,16 @@ def create_dataloaders(config_preproc, config_model,images_dir_path, annotation_
     Returns:
         dataloader: DataLoader for training
     """
-    # Create image processor
-    image_processor = AutoImageProcessor.from_pretrained(config_model["model_name"])
+    # Resolve model name (family name -> actual HuggingFace model name)
+    actual_model_name = resolve_model_name(config_model["model_name"])
+    
+    # Create image processor based on model type
+    if actual_model_name.startswith('timm/'):
+        # Use custom timm image processor for FastViT and other timm models
+        image_processor = TimmImageProcessor(actual_model_name)
+    else:
+        # Use HuggingFace image processor for other models (like DINOv2)
+        image_processor = AutoImageProcessor.from_pretrained(actual_model_name)
     
     # Create dataset
     dataset = PoseDataset(
@@ -225,3 +243,46 @@ def create_dataloaders(config_preproc, config_model,images_dir_path, annotation_
     )
     
     return dataloader 
+
+class TimmImageProcessor:
+    """Custom image processor for timm models that provides consistent interface"""
+    def __init__(self, model_name):
+        # Remove 'timm/' prefix if present
+        if model_name.startswith('timm/'):
+            model_name = model_name[5:]
+        
+        # Create a dummy model to get the config
+        model = timm.create_model(model_name, pretrained=False)
+        self.data_config = resolve_data_config({}, model=model)
+        
+        # Get input size info
+        self.input_size = self.data_config['input_size']
+        self.image_size = self.input_size[1]  # Assuming square images
+        
+        # Create transform for preprocessing
+        self.transform = create_transform(**self.data_config, is_training=False)
+        
+        # Create crop_size attribute for compatibility with existing code
+        self.crop_size = {
+            'width': self.image_size,
+            'height': self.image_size
+        }
+    
+    def __call__(self, images, return_tensors="pt"):
+        """Process images like HuggingFace processors"""
+        if not isinstance(images, list):
+            images = [images]
+        
+        processed = []
+        for image in images:
+            if isinstance(image, np.ndarray):
+                image = Image.fromarray(image)
+            
+            # Apply timm transforms
+            tensor = self.transform(image)
+            processed.append(tensor)
+        
+        # Stack tensors
+        pixel_values = torch.stack(processed)
+        
+        return {"pixel_values": pixel_values} 

@@ -10,6 +10,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from model.dinov2_pose import Dinov2PoseModel, Dinov2PoseModelLoRA
+from model.model_utils import create_model_from_config, save_model_checkpoint, load_model_smart
 from data_loader.data_loader import create_dataloaders
 from config.config import get_default_configs
 from src.model_utils import compute_pckh_dataset
@@ -191,30 +192,13 @@ def main(args):
     
     # Create model
     print(f"Creating model {config_model['model_name']}...")
-    if config_model['use_lora']:
-        print("Using LoRA model")
-        model = Dinov2PoseModelLoRA(
-            num_keypoints=config_model['num_keypoints'],
-            backbone=config_model['model_name'],
-            heatmap_size=config_model['output_heatmap_size'],
-            lora_rank=config_model['lora_rank'],
-            lora_alpha=config_model['lora_alpha'],
-            lora_dropout=config_model['lora_dropout']
-        )
-    else:
-        print("Using original model")
-        model = Dinov2PoseModel(
-            num_keypoints=config_model['num_keypoints'],
-            backbone=config_model['model_name'],
-            unfreeze_last_n_layers=config_model['unfreeze_last_n_layers'],
-            heatmap_size=config_model['output_heatmap_size']
-        )
-
-    # load model from checkpoint if specified
+    
+    # Check if we need to load from checkpoint or create new model
     if config_model['load_model'].endswith('.pth'):
-        # load model from checkpoint
-        model_dict = torch.load(config_model['load_model'])
-        model.load_state_dict(model_dict['model_state_dict'])
+        print(f"Loading model from {config_model['load_model']}")
+        model = load_model_smart(config_model['load_model'], eval_mode=False)
+    else:
+        model = create_model_from_config(config_model)
     model.to(device)
     
     # Compile the model
@@ -302,20 +286,19 @@ def main(args):
             
         # Save checkpoint
         if (epoch + 1) % 20 == 0:
-            # save model
             checkpoint_path = os.path.join(config_training['checkpoint_dir'], f'checkpoint_epoch_{epoch+1}.pth')
-            torch.save({
-                'epoch': epoch,
-                'model_state_dict': compiled_model.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
-                'train_loss': train_loss,
-                'valid_loss': val_loss,
-                'loss_weight': loss_weighting.best_weight,
-                'config_model': config_model,
-                'config_training': config_training,
-                'config_preproc': config_preproc
-                }, checkpoint_path)
-            print(f"Checkpoint saved to {checkpoint_path}")
+            save_model_checkpoint(
+                model=compiled_model,
+                optimizer=optimizer,
+                epoch=epoch,
+                train_loss=train_loss,
+                valid_loss=val_loss,
+                loss_weight=loss_weighting.best_weight,
+                config_model=config_model,
+                config_training=config_training,
+                config_preproc=config_preproc,
+                save_path=checkpoint_path
+            )
         
         # Save best model
         if (epoch + 1) % config_training['save_freq'] == 0:
@@ -326,18 +309,18 @@ def main(args):
             # save model only when either 2d or 3d pckh improved
             if np.mean(pckh_2d) > best_pckh_2d or np.mean(pckh_3d) > best_pckh_3d:
                 checkpoint_path = os.path.join(config_training['checkpoint_dir'], f'best_model_{epoch+1}.pth')
-                torch.save({
-                    'epoch': epoch,
-                    'model_state_dict': compiled_model.state_dict(),
-                    'optimizer_state_dict': optimizer.state_dict(),
-                    'train_loss': train_loss,
-                    'valid_loss': val_loss,
-                    'loss_weight': loss_weighting.best_weight,
-                    'config_model': config_model,
-                    'config_training': config_training,
-                    'config_preproc': config_preproc
-                }, checkpoint_path)
-                print(f"Saved best model to {checkpoint_path}")
+                save_model_checkpoint(
+                    model=compiled_model,
+                    optimizer=optimizer,
+                    epoch=epoch,
+                    train_loss=train_loss,
+                    valid_loss=val_loss,
+                    loss_weight=loss_weighting.best_weight,
+                    config_model=config_model,
+                    config_training=config_training,
+                    config_preproc=config_preproc,
+                    save_path=checkpoint_path
+                )
             
             # update best pckh scores
             if pckh_2d > best_pckh_2d:
@@ -347,18 +330,18 @@ def main(args):
     
     # Save final model
     checkpoint_path = os.path.join(config_training['checkpoint_dir'], 'final_model.pth')
-    torch.save({
-        'epoch': config_training['num_epochs'],
-        'model_state_dict': compiled_model.state_dict(),
-        'optimizer_state_dict': optimizer.state_dict(),
-        'train_loss': train_loss,
-        'valid_loss': val_loss,
-        'loss_weight': loss_weighting.best_weight,
-        'config_model': config_model,
-        'config_training': config_training,
-        'config_preproc': config_preproc
-    }, checkpoint_path)
-    print(f"Saved final model to {checkpoint_path}")
+    save_model_checkpoint(
+        model=compiled_model,
+        optimizer=optimizer,
+        epoch=config_training['num_epochs'],
+        train_loss=train_loss,
+        valid_loss=val_loss,
+        loss_weight=loss_weighting.best_weight,
+        config_model=config_model,
+        config_training=config_training,
+        config_preproc=config_preproc,
+        save_path=checkpoint_path
+    )
     
     # Plot losses
     plt.figure(figsize=(10, 5))
