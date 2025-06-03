@@ -24,14 +24,19 @@ class DynamicLossWeighting:
         
     def update(self, kp_loss, z_loss, is_validation=False):
         if is_validation:
-            # Validation에서는 weight를 업데이트하지 않고 현재 weight 반환
             return self.weight
             
-        current_ratio = z_loss / (kp_loss + 1e-8)
-        if current_ratio > self.target_ratio:
-            self.weight *= (1 - self.adjustment_rate)
-        else:
-            self.weight *= (1 + self.adjustment_rate)
+        # make weight * z_loss ≈ kp_loss
+        target_weight = (kp_loss + 1e-8) / (z_loss + 1e-8)
+        
+        # Exponential moving average for smooth update
+        self.weight = (1 - self.adjustment_rate) * self.weight + self.adjustment_rate * target_weight
+        
+        # weight boundary
+        min_weight = 1e-3
+        max_weight = 10.0
+        self.weight = max(min_weight, min(max_weight, self.weight))
+        
         return self.weight
     
     def update_best_weight(self, val_loss):
@@ -141,70 +146,6 @@ def train_one_epoch(model, dataloader, device, optimizer, loss_weighting, epoch,
         print(f"Validation - Loss: {avg_loss:.4f}, Keypoint Loss: {avg_keypoint_loss:.4f}, 3D Loss: {avg_z_coords_loss:.4f}")
     else:
         print(f"Epoch {epoch+1} - Loss: {avg_loss:.4f}, Keypoint Loss: {avg_keypoint_loss:.4f}, 3D Loss: {avg_z_coords_loss:.4f}, Elapsed Time: {end_time - start_time:.2f}s")
-    
-    return avg_loss, avg_keypoint_loss, avg_z_coords_loss
-
-def validate(model, dataloader, device):
-    """
-    Validate the model
-    
-    Args:
-        model: Model to validate
-        dataloader: DataLoader for validation data
-        device: Device to validate on
-    
-    Returns:
-        avg_loss: Average loss for the validation set
-    """
-    model.eval()
-    running_loss = 0.0
-    running_keypoint_loss = 0.0
-    running_z_coords_loss = 0.0
-    
-    with torch.no_grad():
-        progress_bar = tqdm(enumerate(dataloader), total=len(dataloader), 
-                          desc=f"Validation", leave=False)
-        
-        loss_weighting = DynamicLossWeighting()
-        for i, batch in progress_bar:
-            # Move data to device
-            pixel_values = batch['image'].to(device)
-            heatmaps = batch['2d_heatmaps'].to(device)
-            kps = batch['2d_keypoints'].to(device)
-            z_coords = batch['z_coords'].to(device)
-            
-            # Forward pass
-            pred_heatmaps, pred_z_coords = model(pixel_values)
-            
-            # Get the confidence mask
-            confidence_mask = kps[..., 2]
-            
-            # Compute losses
-            kp_loss = keypoint_loss(pred_heatmaps, heatmaps, confidence_mask)
-            z_coords_loss = z_loss(pred_z_coords, z_coords, confidence_mask)
-            
-            # Update loss weight dynamically
-            weight = loss_weighting.update(kp_loss.item(), z_coords_loss.item(), is_validation=True)
-            loss = kp_loss + weight * z_coords_loss
-            
-            # Update statistics
-            running_loss += loss.item()
-            running_keypoint_loss += kp_loss.item()
-            running_z_coords_loss += z_coords_loss.item() * weight
-            
-            # Update progress bar
-            progress_bar.set_postfix({
-                'val_loss': f"{running_loss / (i + 1):.6f}",
-                'val_kp_loss': f"{running_keypoint_loss / (i + 1):.6f}",
-                'val_z_coords_loss': f"{running_z_coords_loss / (i + 1):.6f}"
-            })
-    
-    # Calculate average losses
-    avg_loss = running_loss / len(dataloader)
-    avg_keypoint_loss = running_keypoint_loss / len(dataloader)
-    avg_z_coords_loss = running_z_coords_loss / len(dataloader)
-    
-    print(f"Validation - Loss: {avg_loss:.4f}, Keypoint Loss: {avg_keypoint_loss:.4f}, 3D Loss: {avg_z_coords_loss:.4f}")
     
     return avg_loss, avg_keypoint_loss, avg_z_coords_loss
 
