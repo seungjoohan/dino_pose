@@ -2,6 +2,13 @@
 
 This project uses DINOv2 (a Vision Transformer model) as a backbone for keypoint estimation, training on a custom dataset. The implementation includes custom heads to predict 2D heatmaps and 3D coordinate values for keypoints.
 
+Now supports other Vision Transformer backbones and LoRA version as well!
+
+```bash
+# See what options are supported
+python model_info.py --backbones
+```
+
 ## Features
 
 - Uses pre-trained DINOv2 as a backbone for feature extraction
@@ -14,11 +21,11 @@ This project uses DINOv2 (a Vision Transformer model) as a backbone for keypoint
 ### Run the Hugging Face Implementation
 
 ```bash
-# Run with your own image
-python src/demo.py --image path/to/your/image.jpg
+# Run with your own input - supports both image and video
+python src/demo.py --input path/to/your/image.jpg #--output path/to/video.mp4 (for video input)
 
 # Choose a different DINOv2 model variant
-python src/demo.py --image path/to/your/image.jpg --model facebook/dinov2-base
+python src/demo.py --input path/to/your/image.jpg --model facebook/dinov2-base
 ```
 
 Fine-tuned model will soon be added as one of the model choices
@@ -32,7 +39,7 @@ The model architecture consists of:
 2. **Heatmap Head**: Multi-layer perceptron for 2D keypoint heatmap prediction
 3. **Z-coords Head**: Multi-layer perceptron for z coordinate prediction
 
-### Finetune DINOv2 keypoint estimation 
+### Finetune ViT pose estimation 
 ```bash
 python train.py --config_file config/config.py
 ```

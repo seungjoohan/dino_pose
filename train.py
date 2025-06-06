@@ -9,7 +9,6 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.optim.lr_scheduler import ReduceLROnPlateau
-from model.dinov2_pose import Dinov2PoseModel, Dinov2PoseModelLoRA
 from model.model_utils import create_model_from_config, save_model_checkpoint, load_model_smart
 from data_loader.data_loader import create_dataloaders
 from config.config import get_default_configs
