@@ -20,7 +20,7 @@ def weighted_max_loc(heatmap, target_size=(224,224)):
     Compute the weighted maximum location of a heatmap
     """
     heatmap = np.squeeze(heatmap)
-    center_x, center_y, _ = argmax_ind(heatmap)
+    center_y, center_x, _ = argmax_ind(heatmap)
     padding = 2
     min_x = max(0, center_x - padding)
     max_x = min(heatmap.shape[1], center_x + padding + 1)  # +1 for inclusive range
@@ -64,8 +64,9 @@ def compute_pckh(pred_keypoints, target_keypoints, threshold_ratio=0.5):
         top_gt = target_keypoints[KeyPoints.RIGHT_HIP.value]
         neck_gt = target_keypoints[KeyPoints.LEFT_HIP.value]
         if top_gt[2] == 0 or neck_gt[2] == 0:
-            print("TOP, NECK, RIGHT_HIP, LEFT_HIP are not visible. Check cropping")
-            import pdb;pdb.set_trace()
+            # No reference points available - return 0.0
+            print("Warning: TOP, NECK, RIGHT_HIP, LEFT_HIP are not visible. Cannot compute PCKh.")
+            return 0.0  
 
     threshold_dist = np.sqrt((top_gt[0] - neck_gt[0])**2 + (top_gt[1] - neck_gt[1])**2) * threshold_ratio
 
@@ -103,49 +104,58 @@ def compute_pckh_dataset(model, image_dir, annotation_path, model_name, device, 
         pckh_3d.append(compute_pckh_z(z_coords.cpu().detach().numpy(), target_z_coords, target_kps, threshold_ratio))
     return np.mean(pckh_2d), np.mean(pckh_3d)
 
-def compute_pckh_z_batch(pred_z_coords_batch, target_z_coords_batch, target_keypoints_batch, threshold=0.5):
+def convert_z_to_annotation_space(pred_z_coords, target_z_coords, target_keypoints):
     """
-    Compute PCKh metric for a batch of z-coordinates
+    Convert predicted z_coords from normalized space back to annotation coordinate space
     """
-    batch_size = pred_z_coords_batch.shape[0]
-    entry_pckh = []
-    for b in range(batch_size):
-        pred_z_coords = pred_z_coords_batch[b]
-        target_z_coords = target_z_coords_batch[b]
-        target_keypoints = target_keypoints_batch[b]
-        entry_pckh.append(compute_pckh_z(pred_z_coords, target_z_coords, target_keypoints, threshold))
-    
-    return np.mean(entry_pckh)
-
-def compute_pckh_z(pred_z_coords, target_z_coords, target_keypoints, threshold=0.5):
-    """
-    Compute PCKh metric for z-coordinates
-    """
-    # scale 2d visible keypoints - very unlikely to have non visible keypoints in 3d (dataset characterstic)
+    # Calculate the same scale and CoM adjustment as used in data preprocessing
     vis_mask = np.array([1 if point[2] != 0 else 0 for point in target_keypoints])
     x_coords = target_keypoints[:, 0] * vis_mask
     y_coords = target_keypoints[:, 1] * vis_mask
     x_std = np.std(x_coords)
     y_std = np.std(y_coords)
     scale = (x_std + y_std) / 2
+    if scale == 0:
+        scale = np.finfo(np.float32).eps
     
-    x_coords_scaled = x_coords / scale
-    y_coords_scaled = y_coords / scale
-
-    x_coords_centered = x_coords_scaled - (x_coords_scaled * com_weights)
-    y_coords_centered = y_coords_scaled - (y_coords_scaled * com_weights)
-
-    # approximating distiance to camera
-    d_to_camera = np.max((5, np.max(np.abs(target_z_coords[target_z_coords < 0] * 1.1))))
-
-    center = [0, 0]
-    true_x = (x_coords_centered - center[0]) * (target_z_coords + d_to_camera) / d_to_camera
-    true_y = (y_coords_centered - center[1]) * (target_z_coords + d_to_camera) / d_to_camera
-
-    threshold_dist = threshold * np.sqrt((true_x[1] - true_x[0])**2 + (true_y[1] - true_y[0])**2 + (target_z_coords[1] - target_z_coords[0])**2)
-    pred_distances = np.abs(pred_z_coords - target_z_coords)
+    # Calculate CoM adjustment for target_z_coords
+    com_adjustment = np.sum(target_z_coords * com_weights)
     
-    return np.nanmean(pred_distances < threshold_dist)
+    # Convert predicted z_coords back to annotation coordinate system
+    # Reverse the preprocessing: pred_z_coords * scale + com_adjustment
+    pred_z_coords_annotation = pred_z_coords * scale + com_adjustment
+    
+    return pred_z_coords_annotation, scale, com_adjustment
+
+def compute_pckh_z(pred_z_coords, target_z_coords, target_keypoints, threshold=0.5):
+    """
+    Compute PCKh metric for z-coordinates
+    """
+    # Convert predicted z_coords back to annotation coordinate system
+    pred_z_coords_annotation, scale, com_adjustment = convert_z_to_annotation_space(
+        pred_z_coords, target_z_coords, target_keypoints
+    )
+    
+    # Compute pckh
+    pred_distances = np.abs(pred_z_coords_annotation - target_z_coords)
+    top_idx = 0
+    neck_idx = 1
+    
+    if (target_keypoints[top_idx, 2] > 0 and target_keypoints[neck_idx, 2] > 0):
+        # 3D distance between top and neck
+        x_dist = target_keypoints[top_idx, 0] - target_keypoints[neck_idx, 0]
+        y_dist = target_keypoints[top_idx, 1] - target_keypoints[neck_idx, 1]
+        z_dist = target_z_coords[top_idx] - target_z_coords[neck_idx]
+        reference_dist_3d = np.sqrt(x_dist**2 + y_dist**2 + z_dist**2)
+    else:
+        # Fallback to using standard deviation of z coordinates
+        reference_dist_3d = np.std(target_z_coords[target_z_coords != 0])
+    
+    threshold_dist = threshold * reference_dist_3d
+    
+    correct_predictions = pred_distances < threshold_dist
+    
+    return np.nanmean(correct_predictions)
     
 def plot_keypoints(image, pred_heatmaps, keypoint_label=True, figsize=(12, 8)):
     """
