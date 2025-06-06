@@ -22,11 +22,25 @@ class DynamicLossWeighting:
         self.best_weight = initial_weight
         self.best_val_loss = float('inf')
         
+        # Track running averages for normalization
+        self.kp_loss_avg = None
+        self.z_loss_avg = None
+        self.momentum = 0.9
+        
     def update(self, kp_loss, z_loss, is_validation=False):
         if is_validation:
             return self.weight
             
-        # make weight * z_loss ≈ kp_loss
+        # Update running averages
+        if self.kp_loss_avg is None:
+            self.kp_loss_avg = kp_loss
+            self.z_loss_avg = z_loss
+        else:
+            self.kp_loss_avg = self.momentum * self.kp_loss_avg + (1 - self.momentum) * kp_loss
+            self.z_loss_avg = self.momentum * self.z_loss_avg + (1 - self.momentum) * z_loss
+        
+        # Calculate weight to make weighted z_loss comparable to kp_loss
+        # Target: weight * z_loss ≈ kp_loss
         target_weight = (kp_loss + 1e-8) / (z_loss + 1e-8)
         
         # Exponential moving average for smooth update
@@ -38,6 +52,34 @@ class DynamicLossWeighting:
         self.weight = max(min_weight, min(max_weight, self.weight))
         
         return self.weight
+    
+    def get_balanced_loss(self, kp_loss, z_loss):
+        """
+        Calculate truly balanced loss where both components contribute equally
+        """
+        if self.kp_loss_avg is None or self.z_loss_avg is None:
+            # Fallback to current method if no averages yet
+            return kp_loss + self.weight * z_loss
+        
+        # Method 1: Normalize both losses to [0,1] based on running averages
+        normalized_kp = kp_loss / (self.kp_loss_avg + 1e-8)
+        normalized_z = z_loss / (self.z_loss_avg + 1e-8)
+        balanced_loss = normalized_kp + normalized_z
+        
+        return balanced_loss
+    
+    def get_loss_contributions(self, kp_loss, z_loss):
+        """
+        Get the individual contributions of each loss for monitoring
+        """
+        if self.kp_loss_avg is None or self.z_loss_avg is None:
+            kp_contrib = kp_loss.item()
+            z_contrib = (self.weight * z_loss).item()
+        else:
+            kp_contrib = (kp_loss / (self.kp_loss_avg + 1e-8)).item()
+            z_contrib = (z_loss / (self.z_loss_avg + 1e-8)).item()
+        
+        return kp_contrib, z_contrib
     
     def update_best_weight(self, val_loss):
         if val_loss < self.best_val_loss:
@@ -115,8 +157,13 @@ def train_one_epoch(model, dataloader, device, optimizer, loss_weighting, epoch,
                 is_validation=is_validation
             )
             
-            # Compute weighted loss
-            loss = kp_loss + current_weight * z_coords_loss
+            # Compute balanced loss (both methods available)
+            if not is_validation:
+                # Use balanced loss for training
+                loss = loss_weighting.get_balanced_loss(kp_loss, z_coords_loss)
+            else:
+                # Use traditional weighted loss for validation consistency
+                loss = kp_loss + current_weight * z_coords_loss
             
             if not is_validation:
                 loss.backward()
@@ -127,11 +174,16 @@ def train_one_epoch(model, dataloader, device, optimizer, loss_weighting, epoch,
             running_keypoint_loss += kp_loss.item()
             running_z_coords_loss += z_coords_loss.item()
             
+            # Get loss contributions for monitoring
+            kp_contrib, z_contrib = loss_weighting.get_loss_contributions(kp_loss, z_coords_loss)
+            
             # Update progress bar
             progress_bar.set_postfix({
                 'loss': f"{running_loss / (i + 1):.6f}",
                 'kp_loss': f"{running_keypoint_loss / (i + 1):.6f}",
-                'z_coords_loss': f"{running_z_coords_loss / (i + 1):.6f}",
+                'z_loss': f"{running_z_coords_loss / (i + 1):.6f}",
+                'kp_contrib': f"{kp_contrib:.3f}",
+                'z_contrib': f"{z_contrib:.3f}",
                 'weight': f"{current_weight:.4f}"
             })
     
