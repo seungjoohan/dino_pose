@@ -239,6 +239,7 @@ def create_dataloaders(config_preproc, config_model,images_dir_path, annotation_
         batch_size=batch_size,
         shuffle=True,
         num_workers=num_workers,
+        persistent_workers=True,
         pin_memory=True
     )
     
