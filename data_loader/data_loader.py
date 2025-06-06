@@ -62,10 +62,10 @@ class PoseDataset(Dataset):
         """
         Convert keypoints to heatmaps. Apply gaussian smoothing
         """
-        heatmap = np.zeros((image.size[0], image.size[1], num_keypoints))
+        width, height = image.size
+        heatmap = np.zeros((height, width, num_keypoints))
 
         # Gaussian heatmap parameters
-        width, height = image.size
         sigma = 15.0
         th = 1.6052
         delta = math.sqrt(th * 2)
@@ -88,10 +88,10 @@ class PoseDataset(Dataset):
                 continue
 
             # Create Gaussian heatmap
-            xx, yy = np.ogrid[x_min:x_max, y_min:y_max]
+            yy, xx = np.ogrid[y_min:y_max, x_min:x_max]
             d2 = (xx - center_x) ** 2 + (yy - center_y) ** 2
             exponent = np.exp(-d2 / (2 * sigma ** 2))
-            heatmap[x_min:x_max, y_min:y_max, i] = np.maximum(heatmap[x_min:x_max, y_min:y_max, i], exponent)
+            heatmap[y_min:y_max, x_min:x_max, i] = np.maximum(heatmap[y_min:y_max, x_min:x_max, i], exponent)
 
         # Resize heatmap to target size
         heatmap = cv2.resize(heatmap, (target_size[0], target_size[1]), interpolation=cv2.INTER_CUBIC)
