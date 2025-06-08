@@ -3,7 +3,7 @@ import torch.nn as nn
 from transformers import AutoImageProcessor, Dinov2Model
 from .lora import LoRAAttention
 from .base_pose import BasePoseModel
-from .pose_heads import PoseHeads
+from .pose_heads import SpatialAwarePoseHeads
 from typing import Dict, Any
 
 class Dinov2PoseModel(BasePoseModel):
@@ -40,10 +40,15 @@ class Dinov2PoseModel(BasePoseModel):
         self.feat_dim = self.backbone.config.hidden_size
         
         # Initialize pose heads
-        self.pose_heads = PoseHeads(
-            feat_dim=self.feat_dim,
+        self.pose_heads = SpatialAwarePoseHeads(
+            feat_channels=self.feat_dim,
             num_keypoints=num_keypoints,
-            heatmap_size=heatmap_size
+            heatmap_size=heatmap_size,
+            spatial_input_size=16,
+            z_coord_config={
+                'hidden_dims': (1024, 512, 256),
+                'dropout_rate': 0.1
+            }
         )
     
     @classmethod
@@ -57,20 +62,18 @@ class Dinov2PoseModel(BasePoseModel):
         )
     
     def forward(self, pixel_values):
-        """
-        Args:
-            pixel_values: Input images (B, C, W, H)
-            
-        Returns:
-            heatmaps: Predicted 2D heatmaps (B, num_keypoints, width, height)
-            z_coords: Predicted z-coordinates (B, num_keypoints)
-        """
         # Extract features using the backbone
         outputs = self.backbone(pixel_values)
-        features = outputs.last_hidden_state[:, 0, :]
+            
+        patch_tokens = outputs.last_hidden_state[:, 1:, :]  # [B, 256, 384]
+        B, N, D = patch_tokens.shape
+            
+        # Reshape to 2D feature map: 256 tokens -> 16x16 spatial
+        H = W = int(N ** 0.5)  # 16 = sqrt(256)
+        # Use contiguous() to ensure memory layout compatibility
+        spatial_features = patch_tokens.contiguous().view(B, H, W, D).permute(0, 3, 1, 2).contiguous()  # [B, 384, 16, 16]
         
-        # pose heads
-        heatmaps, z_coords = self.pose_heads(features)
+        heatmaps, z_coords = self.pose_heads(spatial_features)
         
         return heatmaps, z_coords
         
@@ -119,10 +122,15 @@ class Dinov2PoseModelLoRA(BasePoseModel):
         self.feat_dim = self.backbone.config.hidden_size
         
         # Initialize pose heads
-        self.pose_heads = PoseHeads(
-            feat_dim=self.feat_dim,
+        self.pose_heads = SpatialAwarePoseHeads(
+            feat_channels=self.feat_dim,
             num_keypoints=num_keypoints,
-            heatmap_size=heatmap_size
+            heatmap_size=heatmap_size,
+            spatial_input_size=16,
+            z_coord_config={
+                'hidden_dims': (1024, 512, 256),
+                'dropout_rate': 0.1
+            }
         )
     
     @classmethod
@@ -138,20 +146,18 @@ class Dinov2PoseModelLoRA(BasePoseModel):
         )
     
     def forward(self, pixel_values):
-        """
-        Args:
-            pixel_values: Input images (B, C, W, H)
-            
-        Returns:
-            heatmaps: Predicted 2D heatmaps (B, num_keypoints, width, height)
-            z_coords: Predicted z-coordinates (B, num_keypoints)
-        """
         # Extract features using the backbone
         outputs = self.backbone(pixel_values)
-        features = outputs.last_hidden_state[:, 0, :]
+            
+        patch_tokens = outputs.last_hidden_state[:, 1:, :]  # [B, 256, 384]
+        B, N, D = patch_tokens.shape
+            
+        # Reshape to 2D feature map: 256 tokens -> 16x16 spatial
+        H = W = int(N ** 0.5)  # 16 = sqrt(256)
+        # Use contiguous() to ensure memory layout compatibility
+        spatial_features = patch_tokens.contiguous().view(B, H, W, D).permute(0, 3, 1, 2).contiguous()  # [B, 384, 16, 16]
         
-        # pose heads
-        heatmaps, z_coords = self.pose_heads(features)
+        heatmaps, z_coords = self.pose_heads(spatial_features)
         
         return heatmaps, z_coords
         

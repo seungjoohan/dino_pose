@@ -242,9 +242,10 @@ class SpatialAwareHeatmapHead(nn.Module):
         
         while current_size < heatmap_size:
             out_channels = max(128, in_channels // 2)
+            stride = heatmap_size // current_size
             upsampling_stages.append(nn.Sequential(
                 nn.ConvTranspose2d(in_channels, out_channels, 
-                                 kernel_size=4, stride=2, padding=1),
+                                 kernel_size=4, stride=stride, padding=1),
                 nn.BatchNorm2d(out_channels),
                 nn.ReLU(inplace=True)
             ))
@@ -284,9 +285,7 @@ class SpatialAwareHeatmapHead(nn.Module):
 
 
 class SpatialAwarePoseHeads(nn.Module):
-    """
-    Combine spatial-aware heatmap head with standard z-coordinate head
-    """
+    """ Combine spatial-aware heatmap head with standard z-coordinate head """
 
     def __init__(self,
                  feat_channels: int = 768,
