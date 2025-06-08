@@ -4,7 +4,7 @@ from typing import Union, Dict, Any, Optional
 from transformers import AutoModel, AutoImageProcessor
 from .base_pose import BasePoseModel
 from .dinov2_pose import Dinov2PoseModel, Dinov2PoseModelLoRA
-from .fastvit_pose import FastVitPoseModel
+from .fastvit_pose import FastVitPoseModel, FastVitPoseModelLoRA
 
 # Backbone registry for supported models
 BACKBONE_REGISTRY = {
@@ -45,7 +45,7 @@ BACKBONE_REGISTRY = {
     # FastViT models
     'timm/fastvit_t8.apple_in1k': {
         'model_class': FastVitPoseModel,
-        'lora_class': None,
+        'lora_class': FastVitPoseModelLoRA,
         'family': 'fastvit',
         'default_config': {
             'num_keypoints': 24,
@@ -55,7 +55,7 @@ BACKBONE_REGISTRY = {
     },
     'timm/fastvit_ma36.apple_in1k': {
         'model_class': FastVitPoseModel,
-        'lora_class': None,
+        'lora_class': FastVitPoseModelLoRA,
         'family': 'fastvit',
         'default_config': {
             'num_keypoints': 24,
@@ -65,7 +65,7 @@ BACKBONE_REGISTRY = {
     },
     'timm/fastvit_sa12.apple_in1k': {
         'model_class': FastVitPoseModel,
-        'lora_class': None,
+        'lora_class': FastVitPoseModelLoRA,
         'family': 'fastvit',
         'default_config': {
             'num_keypoints': 24,
@@ -75,7 +75,7 @@ BACKBONE_REGISTRY = {
     },
     'timm/fastvit_sa24.apple_in1k': {
         'model_class': FastVitPoseModel,
-        'lora_class': None,
+        'lora_class': FastVitPoseModelLoRA,
         'family': 'fastvit',
         'default_config': {
             'num_keypoints': 24,
@@ -85,7 +85,7 @@ BACKBONE_REGISTRY = {
     },
     'timm/fastvit_sa36.apple_in1k': {
         'model_class': FastVitPoseModel,
-        'lora_class': None,
+        'lora_class': FastVitPoseModelLoRA,
         'family': 'fastvit',
         'default_config': {
             'num_keypoints': 24,

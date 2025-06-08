@@ -1,9 +1,9 @@
 import torch
 import torch.nn as nn
 import timm
-from transformers import AutoImageProcessor
-from .lora import LoRAAttention
+from .lora import FastViTLoRA
 from .base_pose import BasePoseModel
+from .pose_heads import SpatialAwarePoseHeads
 from typing import Dict, Any
 
 class FastVitPoseModel(BasePoseModel):
@@ -17,58 +17,32 @@ class FastVitPoseModel(BasePoseModel):
         self.heatmap_size = heatmap_size
         self.num_keypoints = num_keypoints
         
-        # Load FastViT backbone directly from timm
-        self.backbone = timm.create_model(backbone, pretrained=True, num_classes=0)  # num_classes=0 for feature extraction
+        # Load FastViT backbone
+        self.backbone = timm.create_model(backbone, pretrained=True, num_classes=0)
         
+        self.backbone.head = SpatialAwarePoseHeads(
+            feat_channels=768,  # FastViT final_conv output
+            num_keypoints=num_keypoints,
+            heatmap_size=heatmap_size,
+            spatial_input_size=14,
+            z_coord_config={
+                'hidden_dims': (1024, 512, 256),
+                'dropout_rate': 0.1
+            }
+        )
         # Get model configuration for image preprocessing
         self.backbone_config = self.backbone.default_cfg
         self.input_size = self.backbone_config.get('input_size', (3, 224, 224))
         self.image_size = self.input_size[1]  # Assuming square images
         
-        # Freeze backbone
-        for param in self.backbone.parameters():
-            param.requires_grad = False
-        
-        # Get backbone output features dimension
-        self.feat_dim = self._get_feature_dim()
-        
-        # Project features to a 3D volume that can be upsampled to heatmaps
-        self.feature_projection = nn.Sequential(
-            nn.Linear(self.feat_dim, 1024),
-            nn.ReLU(),
-            nn.Linear(1024, 6*6*256),  # Project to 6x6 spatial features with 256 channels
-            nn.ReLU()
-        )
-        
-        # Heatmap generation using transposed convolutions
-        self.heatmap_head = nn.Sequential(
-            # Input: [B, 256, 6, 6]
-            nn.ConvTranspose2d(256, 256, kernel_size=3, stride=2, padding=1, output_padding=1),  # [B, 256, 12, 12]
-            nn.BatchNorm2d(256),
-            nn.ReLU(),
-            
-            nn.ConvTranspose2d(256, 128, kernel_size=3, stride=2, padding=1, output_padding=1),   # [B, 128, 24, 24]
-            nn.BatchNorm2d(128),
-            nn.ReLU(),
-            
-            nn.ConvTranspose2d(128, 64, kernel_size=3, stride=2, padding=1, output_padding=1),    # [B, 64, 48, 48]
-            nn.BatchNorm2d(64),
-            nn.ReLU(),
-            
-            nn.Conv2d(64, num_keypoints, kernel_size=1)  # [B, num_keypoints, 48, 48]
-        )
-        
-        # Z-coordinate head
-        self.z_head = nn.Sequential(
-            nn.Linear(self.feat_dim, 1024),
-            nn.ReLU(),
-            nn.Dropout(0.2),
-            nn.Linear(1024, 512),
-            nn.ReLU(),
-            nn.Dropout(0.2),
-            nn.Linear(512, num_keypoints)
-        )
+        # Freeze backbone except head
+        for name, param in self.backbone.named_parameters():
+            if not name.startswith('head'):
+                param.requires_grad = False
     
+    def forward(self, pixel_values):
+        return self.backbone(pixel_values)
+   
     @classmethod
     def from_config(cls, model_name: str, config: Dict[str, Any]):
         """Factory method to create model from configuration"""
@@ -90,32 +64,25 @@ class FastVitPoseModel(BasePoseModel):
                 print("Using default feature dimension of 768")
                 return 768
     
-    def forward(self, pixel_values):
-        """
-        Args:
-            pixel_values: Input images (B, C, H, W)
-            
-        Returns:
-            heatmaps: Predicted 2D heatmaps (B, num_keypoints, height, width)
-            z_coords: Predicted z-coordinates (B, num_keypoints)
-        """
-        # Extract features using the timm backbone (returns [B, feat_dim])
-        features = self.backbone(pixel_values)
+    
+    def _extract_both_features(self, pixel_values):
+        """Extract both spatial feature map and global features from FastViT backbone"""
+        x = pixel_values
         
-        # Project features to 3D volume for heatmap generation
-        projected_features = self.feature_projection(features)  # [B, 6*6*256]
-        batch_size = projected_features.size(0)
+        # Forward through stem
+        x = self.backbone.stem(x)
         
-        # Reshape to [B, 256, 6, 6]
-        reshaped_features = projected_features.view(batch_size, 256, 6, 6)
+        # Forward through all stages
+        for stage in self.backbone.stages:
+            x = stage(x)
         
-        # Generate heatmaps using transposed convolutions
-        heatmaps = self.heatmap_head(reshaped_features)  # [B, num_keypoints, 48, 48]
+        # Apply final conv (384 -> 768 channels)
+        feature_map = self.backbone.final_conv(x)  # [B, 768, H', W']
         
-        # Apply Z-coordinate head
-        z_coords = self.z_head(features)  # [B, num_keypoints]
+        # Global average pooling for Z head
+        global_features = feature_map.mean(dim=(2, 3))  # [B, 768]
         
-        return heatmaps, z_coords
+        return feature_map, global_features
 
     def count_parameters(self, trainable_only=True):
         """Count the number of parameters in the model"""
@@ -131,9 +98,6 @@ class FastVitPoseModel(BasePoseModel):
                 print(f"Trainable: {name}, Shape: {param.shape}, Parameters: {param.numel():,}")
 
 class FastVitPoseModelLoRA(BasePoseModel):
-    """
-    TODO: FASTViT LoRA - check if LoRAAttention is compatible with timm model
-    """
     def __init__(self, num_keypoints=24, backbone="fastvit_t8.apple_in1k", heatmap_size=48,
                  lora_rank=8, lora_alpha=16, lora_dropout=0.1):
         super(FastVitPoseModelLoRA, self).__init__()
@@ -145,61 +109,39 @@ class FastVitPoseModelLoRA(BasePoseModel):
         self.heatmap_size = heatmap_size
         self.num_keypoints = num_keypoints
         
-        # Load FastViT backbone directly from timm
-        self.backbone = timm.create_model(backbone, pretrained=True, num_classes=0)  # num_classes=0 for feature extraction
+        # Load FastViT backbone
+        self.backbone = timm.create_model(backbone, pretrained=True, num_classes=0)
+
+        # freeze backbone
+        for param in self.backbone.parameters():
+            param.requires_grad = False
+
+        # Apply LoRA to MLP layers (fc1, fc2 in ConvMlp)
+        self.lora_modules = FastViTLoRA.apply_lora_to_model(
+            self.backbone, 
+            target_layers=['mlp.fc1', 'mlp.fc2'],
+            r=lora_rank, 
+            alpha=lora_alpha, 
+            dropout=lora_dropout
+        )
         
+        self.backbone.head = SpatialAwarePoseHeads(
+            feat_channels=768,  # FastViT final_conv output
+            num_keypoints=num_keypoints,
+            heatmap_size=heatmap_size,
+            spatial_input_size=14,
+            z_coord_config={
+                'hidden_dims': (1024, 512, 256),
+                'dropout_rate': 0.1
+            }
+        )
         # Get model configuration for image preprocessing
         self.backbone_config = self.backbone.default_cfg
         self.input_size = self.backbone_config.get('input_size', (3, 224, 224))
         self.image_size = self.input_size[1]  # Assuming square images
-        
-        # Freeze backbone
-        for param in self.backbone.parameters():
-            param.requires_grad = False
-        
-        # TODO: Implement FastViT-specific LoRA for RepMixer blocks
-        # FastViT uses RepMixer blocks instead of traditional attention
-        # Current LoRA implementation is designed for attention layers
-        
-        # Get backbone output features dimension
-        self.feat_dim = self._get_feature_dim()
-        
-        # Project features to a 3D volume that can be upsampled to heatmaps
-        self.feature_projection = nn.Sequential(
-            nn.Linear(self.feat_dim, 1024),
-            nn.ReLU(),
-            nn.Linear(1024, 6*6*256),  # Project to 6x6 spatial features with 256 channels
-            nn.ReLU()
-        )
-        
-        # Heatmap generation using transposed convolutions
-        self.heatmap_head = nn.Sequential(
-            # Input: [B, 256, 6, 6]
-            nn.ConvTranspose2d(256, 256, kernel_size=3, stride=2, padding=1, output_padding=1),  # [B, 256, 12, 12]
-            nn.BatchNorm2d(256),
-            nn.ReLU(),
-            
-            nn.ConvTranspose2d(256, 128, kernel_size=3, stride=2, padding=1, output_padding=1),   # [B, 128, 24, 24]
-            nn.BatchNorm2d(128),
-            nn.ReLU(),
-            
-            nn.ConvTranspose2d(128, 64, kernel_size=3, stride=2, padding=1, output_padding=1),    # [B, 64, 48, 48]
-            nn.BatchNorm2d(64),
-            nn.ReLU(),
-            
-            nn.Conv2d(64, num_keypoints, kernel_size=1)  # [B, num_keypoints, 48, 48]
-        )
-        
-        # Z-coordinate head
-        self.z_head = nn.Sequential(
-            nn.Linear(self.feat_dim, 1024),
-            nn.ReLU(),
-            nn.Dropout(0.2),
-            nn.Linear(1024, 512),
-            nn.ReLU(),
-            nn.Dropout(0.2),
-            nn.Linear(512, num_keypoints)
-        )
+    
+    def forward(self, pixel_values):
+        return self.backbone(pixel_values)
     
     @classmethod
     def from_config(cls, model_name: str, config: Dict[str, Any]):
@@ -226,23 +168,7 @@ class FastVitPoseModelLoRA(BasePoseModel):
                 return 768
     
     def forward(self, pixel_values):
-        # Extract features using the timm backbone (returns [B, feat_dim])
-        features = self.backbone(pixel_values)
-        
-        # Project features to 3D volume for heatmap generation
-        projected_features = self.feature_projection(features)  # [B, 6*6*256]
-        batch_size = projected_features.size(0)
-        
-        # Reshape to [B, 256, 6, 6]
-        reshaped_features = projected_features.view(batch_size, 256, 6, 6)
-        
-        # Generate heatmaps using transposed convolutions
-        heatmaps = self.heatmap_head(reshaped_features)  # [B, num_keypoints, 48, 48]
-        
-        # Apply Z-coordinate head
-        z_coords = self.z_head(features)  # [B, num_keypoints]
-        
-        return heatmaps, z_coords
+        return self.backbone(pixel_values)
 
     def count_parameters(self, trainable_only=True):
         """Count the number of parameters in the model"""

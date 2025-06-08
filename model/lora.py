@@ -55,4 +55,85 @@ class LoRAAttention(nn.Module):
         else:
             return (modified_output,)
     
+
+class ConvLoRA(nn.Module):
+    """ LoRA for Conv2d layers (specifically for FastViT ConvMlp) """
+    def __init__(self, original_conv, r=8, alpha=16, dropout=0.1):
+        super(ConvLoRA, self).__init__()
+        self.original_conv = original_conv
+        self.rank = r
+        self.alpha = alpha
+        self.scaling = alpha / r
+
+        # Get dimensions from original conv
+        self.in_channels = original_conv.in_channels
+        self.out_channels = original_conv.out_channels
+        self.kernel_size = original_conv.kernel_size
+        self.stride = original_conv.stride
+        self.padding = original_conv.padding
+
+        # LoRA parameters for conv (use 1x1 kernels for efficiency)
+        self.lora_A = nn.Conv2d(
+            self.in_channels, r, 
+            kernel_size=1, stride=1, padding=0, bias=False
+        )
+        self.lora_B = nn.Conv2d(
+            r, self.out_channels, 
+            kernel_size=1, stride=1, padding=0, bias=False
+        )
+        self.dropout = nn.Dropout2d(dropout)
+
+        # Initialize weights
+        nn.init.kaiming_uniform_(self.lora_A.weight, a=math.sqrt(5))
+        nn.init.zeros_(self.lora_B.weight)
+        
+        # Freeze original conv parameters
+        for param in self.original_conv.parameters():
+            param.requires_grad = False
+            
+        # Ensure LoRA parameters are trainable
+        for param in self.lora_A.parameters():
+            param.requires_grad = True
+        for param in self.lora_B.parameters():
+            param.requires_grad = True
+
+    def forward(self, x):
+        # Original conv output
+        original_output = self.original_conv(x)
+        
+        # LoRA output
+        lora_output = self.lora_A(x)
+        lora_output = self.dropout(lora_output)
+        lora_output = self.lora_B(lora_output) * self.scaling
+        
+        return original_output + lora_output
+
+
+class FastViTLoRA:
+    """ Utility class to apply LoRA to FastViT models """
+    @staticmethod
+    def apply_lora_to_model(model, target_layers=['mlp.fc1', 'mlp.fc2'], 
+                           r=8, alpha=16, dropout=0.1):
+        """Apply LoRA to specified layers in FastViT model"""
+        lora_modules = []
+        
+        for stage_idx, stage in enumerate(model.stages):
+            for block_idx, block in enumerate(stage.blocks):
+                for target_layer in target_layers:
+                    if hasattr(block, 'mlp') and target_layer.startswith('mlp.'):
+                        layer_name = target_layer.split('.')[1]  # 'fc1' or 'fc2'
+                        if hasattr(block.mlp, layer_name):
+                            original_layer = getattr(block.mlp, layer_name)
+                            if isinstance(original_layer, nn.Conv2d):
+                                # Replace with LoRA version
+                                lora_layer = ConvLoRA(
+                                    original_layer, r=r, alpha=alpha, dropout=dropout
+                                )
+                                setattr(block.mlp, layer_name, lora_layer)
+                                lora_modules.append(
+                                    f"stages.{stage_idx}.blocks.{block_idx}.mlp.{layer_name}"
+                                )
+        
+        return lora_modules
+    
     
