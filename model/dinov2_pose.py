@@ -3,6 +3,7 @@ import torch.nn as nn
 from transformers import AutoImageProcessor, Dinov2Model
 from .lora import LoRAAttention
 from .base_pose import BasePoseModel
+from .pose_heads import PoseHeads
 from typing import Dict, Any
 
 class Dinov2PoseModel(BasePoseModel):
@@ -38,42 +39,11 @@ class Dinov2PoseModel(BasePoseModel):
         # Get backbone output features dimension
         self.feat_dim = self.backbone.config.hidden_size
         
-        # Project features to a 3D volume that can be upsampled to heatmaps
-        self.feature_projection = nn.Sequential(
-            nn.Linear(self.feat_dim, 1024),
-            nn.ReLU(),
-            nn.Linear(1024, 6*6*256),  # Project to 6x6 spatial features with 256 channels
-            nn.ReLU()
-        )
-        
-        # Heatmap generation using transposed convolutions
-        self.heatmap_head = nn.Sequential(
-            # Input: [B, 256, 6, 6]
-            
-            nn.ConvTranspose2d(256, 256, kernel_size=3, stride=2, padding=1, output_padding=1),  # [B, 128, 12, 12]
-            nn.BatchNorm2d(256),
-            nn.ReLU(),
-            
-            nn.ConvTranspose2d(256, 128, kernel_size=3, stride=2, padding=1, output_padding=1),   # [B, 64, 24, 24]
-            nn.BatchNorm2d(128),
-            nn.ReLU(),
-            
-            nn.ConvTranspose2d(128, 64, kernel_size=3, stride=2, padding=1, output_padding=1),    # [B, 32, 48, 48]
-            nn.BatchNorm2d(64),
-            nn.ReLU(),
-            
-            nn.Conv2d(64, num_keypoints, kernel_size=1)  # [B, num_keypoints, 48, 48]
-        )
-        
-        # Z-coordinate head
-        self.z_head = nn.Sequential(
-            nn.Linear(self.feat_dim, 1024),
-            nn.ReLU(),
-            nn.Dropout(0.2),
-            nn.Linear(1024, 512),
-            nn.ReLU(),
-            nn.Dropout(0.2),
-            nn.Linear(512, num_keypoints)
+        # Initialize pose heads
+        self.pose_heads = PoseHeads(
+            feat_dim=self.feat_dim,
+            num_keypoints=num_keypoints,
+            heatmap_size=heatmap_size
         )
     
     @classmethod
@@ -99,18 +69,8 @@ class Dinov2PoseModel(BasePoseModel):
         outputs = self.backbone(pixel_values)
         features = outputs.last_hidden_state[:, 0, :]
         
-        # Project features to 3D volume for heatmap generation
-        projected_features = self.feature_projection(features)  # [B, 6*6*256]
-        batch_size = projected_features.size(0)
-        
-        # Reshape to [B, 256, 6, 6]
-        reshaped_features = projected_features.view(batch_size, 256, 6, 6)
-        
-        # Generate heatmaps using transposed convolutions
-        heatmaps = self.heatmap_head(reshaped_features)  # [B, num_keypoints, 48, 48]
-        
-        # Apply Z-coordinate head
-        z_coords = self.z_head(features)  # [B, num_keypoints]
+        # pose heads
+        heatmaps, z_coords = self.pose_heads(features)
         
         return heatmaps, z_coords
         
@@ -158,42 +118,11 @@ class Dinov2PoseModelLoRA(BasePoseModel):
         # Get backbone output features dimension
         self.feat_dim = self.backbone.config.hidden_size
         
-        # Project features to a 3D volume that can be upsampled to heatmaps
-        self.feature_projection = nn.Sequential(
-            nn.Linear(self.feat_dim, 1024),
-            nn.ReLU(),
-            nn.Linear(1024, 6*6*256),  # Project to 6x6 spatial features with 256 channels
-            nn.ReLU()
-        )
-        
-        # Heatmap generation using transposed convolutions
-        self.heatmap_head = nn.Sequential(
-            # Input: [B, 256, 6, 6]
-            
-            nn.ConvTranspose2d(256, 256, kernel_size=3, stride=2, padding=1, output_padding=1),  # [B, 128, 12, 12]
-            nn.BatchNorm2d(256),
-            nn.ReLU(),
-            
-            nn.ConvTranspose2d(256, 128, kernel_size=3, stride=2, padding=1, output_padding=1),   # [B, 64, 24, 24]
-            nn.BatchNorm2d(128),
-            nn.ReLU(),
-            
-            nn.ConvTranspose2d(128, 64, kernel_size=3, stride=2, padding=1, output_padding=1),    # [B, 32, 48, 48]
-            nn.BatchNorm2d(64),
-            nn.ReLU(),
-            
-            nn.Conv2d(64, num_keypoints, kernel_size=1)  # [B, num_keypoints, 48, 48]
-        )
-        
-        # Z-coordinate head
-        self.z_head = nn.Sequential(
-            nn.Linear(self.feat_dim, 1024),
-            nn.ReLU(),
-            nn.Dropout(0.2),
-            nn.Linear(1024, 512),
-            nn.ReLU(),
-            nn.Dropout(0.2),
-            nn.Linear(512, num_keypoints)
+        # Initialize pose heads
+        self.pose_heads = PoseHeads(
+            feat_dim=self.feat_dim,
+            num_keypoints=num_keypoints,
+            heatmap_size=heatmap_size
         )
     
     @classmethod
@@ -221,18 +150,8 @@ class Dinov2PoseModelLoRA(BasePoseModel):
         outputs = self.backbone(pixel_values)
         features = outputs.last_hidden_state[:, 0, :]
         
-        # Project features to 3D volume for heatmap generation
-        projected_features = self.feature_projection(features)  # [B, 6*6*256]
-        batch_size = projected_features.size(0)
-        
-        # Reshape to [B, 256, 6, 6]
-        reshaped_features = projected_features.view(batch_size, 256, 6, 6)
-        
-        # Generate heatmaps using transposed convolutions
-        heatmaps = self.heatmap_head(reshaped_features)  # [B, num_keypoints, 48, 48]
-        
-        # Apply Z-coordinate head
-        z_coords = self.z_head(features)  # [B, num_keypoints]
+        # pose heads
+        heatmaps, z_coords = self.pose_heads(features)
         
         return heatmaps, z_coords
         

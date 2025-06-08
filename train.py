@@ -245,7 +245,7 @@ def main(args):
     print(f"Creating model {config_model['model_name']}...")
     
     # Check if we need to load from checkpoint or create new model
-    if config_model['load_model'].endswith('.pth'):
+    if config_model['load_model'] and config_model['load_model'].endswith('.pth'):
         print(f"Loading model from {config_model['load_model']}")
         model = load_model_smart(config_model['load_model'], eval_mode=False)
     else:
@@ -335,21 +335,21 @@ def main(args):
             # Update best weight based on validation loss
             loss_weighting.update_best_weight(val_loss)
             
-        # Save checkpoint
-        if (epoch + 1) % 20 == 0:
-            checkpoint_path = os.path.join(config_training['checkpoint_dir'], f'checkpoint_epoch_{epoch+1}.pth')
-            save_model_checkpoint(
-                model=compiled_model,
-                optimizer=optimizer,
-                epoch=epoch,
-                train_loss=train_loss,
-                valid_loss=val_loss,
-                loss_weight=loss_weighting.best_weight,
-                config_model=config_model,
-                config_training=config_training,
-                config_preproc=config_preproc,
-                save_path=checkpoint_path
-            )
+        # # Save checkpoint - disabled for now
+        # if (epoch + 1) % 20 == 0:
+        #     checkpoint_path = os.path.join(config_training['checkpoint_dir'], f'checkpoint_epoch_{epoch+1}.pth')
+        #     save_model_checkpoint(
+        #         model=compiled_model,
+        #         optimizer=optimizer,
+        #         epoch=epoch,
+        #         train_loss=train_loss,
+        #         valid_loss=val_loss,
+        #         loss_weight=loss_weighting.best_weight,
+        #         config_model=config_model,
+        #         config_training=config_training,
+        #         config_preproc=config_preproc,
+        #         save_path=checkpoint_path
+        #     )
         
         # Save best model
         if (epoch + 1) % config_training['save_freq'] == 0:

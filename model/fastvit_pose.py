@@ -250,6 +250,12 @@ class FastVitPoseModelLoRA(BasePoseModel):
             return sum(p.numel() for p in self.parameters() if p.requires_grad)
         else:
             return sum(p.numel() for p in self.parameters())
+            
+    def print_trainable_parameters(self):
+        """Print the names of trainable parameters"""
+        for name, param in self.named_parameters():
+            if param.requires_grad:
+                print(f"Trainable: {name}, Shape: {param.shape}, Parameters: {param.numel():,}")
 
 if __name__ == "__main__":
     print("Testing FastViT models...")
