@@ -1,8 +1,8 @@
-# DINOv2 for Keypoint Estimation
+# Finetuning Vision Transformers for Keypoint Estimation
 
-This project uses DINOv2 (a Vision Transformer model) as a backbone for keypoint estimation, training on a custom dataset. The implementation includes custom heads to predict 2D heatmaps and 3D coordinate values for keypoints.
+This project is to train different Vision Transformer models as a backbone for keypoint estimation, training on a custom dataset. The implementation includes custom heads to predict 2D heatmaps and 3D coordinate values for keypoints. As pose models are primarily focused on on-device performances, I'll try to achieve more accurate, but optimized for on-device inference performance.
 
-Now supports other Vision Transformer backbones and LoRA version as well!
+Currently supports FastViT and DinoV2 backbones!
 
 ```bash
 # See what options are supported
@@ -15,6 +15,7 @@ python model_info.py --backbones
 - Custom heads for 2D heatmap prediction and 3D z-coordinate estimation
 - Support for arbitrary number of keypoints (current version trained with 24 keypoints)
 - Simple inference demo with visualization
+- Trained Model CoreML conversion
 
 ## Quick Start
 
@@ -44,10 +45,11 @@ The model architecture consists of:
 python train.py --config_file config/config.py
 ```
 
-### Implementation using HuggingFace:
-- Uses `Dinov2Model.from_pretrained("facebook/dinov2-small")`
-- Automatic preprocessing with `AutoImageProcessor`
-- Access to all DINOv2 variants through model hub
+### CoreML Conversion
+```bash
+python export_coreml.py -c /path/to/trained/model.pth -o /path/to/save/coreml.mlpackage
+```
+
 
 ## References
 
