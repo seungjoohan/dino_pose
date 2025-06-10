@@ -6,3 +6,5 @@
 
 # Model files
 dinov2_test/.
+
+*xcuserdata*
