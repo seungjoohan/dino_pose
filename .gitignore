@@ -1,8 +1,8 @@
 *.DS_Store
 *.ipynb
 *pycache*
-*test*
 *venv*
+*test*.py
 
 # Model files
-dinov2_pose/*.pth
+dinov2_test/.

@@ -26,25 +26,24 @@ def get_default_configs():
         "is_resize_shortest_edge": True,
         "is_crop": True,
         "is_occultation": False,
-        "heatmap_std": 1.5
+        "heatmap_std": 0.5
     }
 
     config_training = {
         "batch_size": 32,
-        "learning_rate": 1e-5,
-        "weight_decay": 5e-7,
-        "num_epochs": 50,
+        "learning_rate": 3e-5,
+        "weight_decay": 1e-6,
+        "num_epochs": 5,
         "multiprocessing_num": 4,
-        "print_freq": 10,
         "save_freq": 5,
-        "checkpoint_dir": "dinov2_pose_small"
+        "checkpoint_dir": "dinov2_test"
     }
 
     config_model = {
         "model_name": "facebook/dinov2-small",
         "load_model": "",
         "num_keypoints": 24,
-        "unfreeze_last_n_layers": 8,
+        "unfreeze_last_n_layers": 4,
         "use_lora": True,
         "lora_rank": 8,
         "lora_alpha": 16,
