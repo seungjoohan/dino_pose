@@ -1,6 +1,6 @@
 # Finetuning Vision Transformers for Keypoint Estimation
 
-This project is to train different Vision Transformer models as a backbone for keypoint estimation, training on a custom dataset. The implementation includes custom heads to predict 2D heatmaps and 3D coordinate values for keypoints. As pose models are primarily focused on on-device performances, I'll try to achieve more accurate, but optimized for on-device inference performance.
+This project is to train different **Vision Transformer** models as a backbone for keypoint estimation, training on a custom dataset. The implementation includes custom heads to predict 2D heatmaps and 3D coordinate values for keypoints. As pose models are primarily focused on on-device performances, I'll try to achieve more accurate, but optimized for on-device inference performance.
 
 Currently supports FastViT and DinoV2 backbones!
 
@@ -11,11 +11,12 @@ python model_info.py --backbones
 
 ## Features
 
-- Uses pre-trained DINOv2 as a backbone for feature extraction
+- Uses pre-trained Vision Transformers as a backbone for feature extraction
 - Custom heads for 2D heatmap prediction and 3D z-coordinate estimation
-- Support for arbitrary number of keypoints (current version trained with 24 keypoints)
+- Support for arbitrary number of keypoints (current version trained with **24 keypoints**)
 - Simple inference demo with visualization
 - Trained Model CoreML conversion
+- Swift UI app to apply finetuned models
 
 ## Quick Start
 
@@ -50,6 +51,8 @@ python train.py --config_file config/config.py
 python export_coreml.py -c /path/to/trained/model.pth -o /path/to/save/coreml.mlpackage
 ```
 
+### Testing finetuned model on Swift UI
+- Checkout README in `ios_test_app/` to run SwiftUI App
 
 ## References
 
