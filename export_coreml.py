@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Dict, Any, Optional, Tuple
 
 from model.dinov2_pose import Dinov2PoseModel, Dinov2PoseModelLoRA
-from model.fastvit_pose import FastVitPoseModel
+from model.fastvit_pose import FastVitPoseModel, FastVitPoseModelLoRA
 
 
 def detect_model_family(state_dict: Dict[str, torch.Tensor], checkpoint: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
@@ -58,12 +58,23 @@ def detect_model_family(state_dict: Dict[str, torch.Tensor], checkpoint: Dict[st
             else:
                 backbone = 'facebook/dinov2-small'
             
-            # default lora config
+            # Extract LoRA configuration from state_dict
+            lora_rank = 8 
+            lora_alpha = 16
+            lora_dropout = 0.1
+            
+            # Find first LoRA A weight to determine rank
+            lora_a_keys = [k for k in all_keys if 'lora_A.weight' in k]
+            if lora_a_keys:
+                first_lora_a = lora_a_keys[0]
+                lora_rank = state_dict[first_lora_a].shape[0]
+                print(f"   📊 Detected LoRA rank: {lora_rank}")
+            
             config.update({
                 'backbone': backbone,
-                'lora_rank': 8,
-                'lora_alpha': 16,
-                'lora_dropout': 0.1
+                'lora_rank': lora_rank,
+                'lora_alpha': lora_alpha,
+                'lora_dropout': lora_dropout
             })
             
             return 'dinov2_lora', config
@@ -102,19 +113,50 @@ def detect_model_family(state_dict: Dict[str, torch.Tensor], checkpoint: Dict[st
     # 3. detect FastViT model
     fastvit_indicators = ['backbone.patch_embed', 'backbone.stages', 'backbone.norm']
     if any(indicator in key_str for indicator in fastvit_indicators):
-        print("   🎯 Detected: FastViT Pose Model")
-        
-        # estimate backbone size from embedding dimension
-        if 'stages.3.' in key_str and 'stages.2.' in key_str:
-            backbone = 'fastvit_t8.apple_in1k'
+        # Check if this is a LoRA version
+        if any(indicator in key_str for indicator in lora_indicators):
+            print("   🎯 Detected: FastViT LoRA Pose Model")
+            
+            # estimate backbone size from embedding dimension
+            if 'stages.3.' in key_str and 'stages.2.' in key_str:
+                backbone = 'fastvit_t8.apple_in1k'
+            else:
+                backbone = 'fastvit_t8.apple_in1k'
+            
+            # Extract LoRA configuration from state_dict
+            lora_rank = 8
+            lora_alpha = 16
+            lora_dropout = 0.1
+            
+            # Find first LoRA A weight to determine rank
+            lora_a_keys = [k for k in all_keys if 'lora_A.weight' in k]
+            if lora_a_keys:
+                first_lora_a = lora_a_keys[0]
+                lora_rank = state_dict[first_lora_a].shape[0]
+                print(f"   📊 Detected LoRA rank: {lora_rank}")
+            
+            config.update({
+                'backbone': backbone,
+                'lora_rank': lora_rank,
+                'lora_alpha': lora_alpha,
+                'lora_dropout': lora_dropout
+            })
+            
+            return 'fastvit_lora', config
         else:
-            backbone = 'fastvit_t8.apple_in1k'
-        
-        config.update({
-            'backbone': backbone
-        })
-        
-        return 'fastvit', config
+            print("   🎯 Detected: FastViT Pose Model")
+            
+            # estimate backbone size from embedding dimension
+            if 'stages.3.' in key_str and 'stages.2.' in key_str:
+                backbone = 'fastvit_t8.apple_in1k'
+            else:
+                backbone = 'fastvit_t8.apple_in1k'
+            
+            config.update({
+                'backbone': backbone
+            })
+            
+            return 'fastvit', config
     
     # 4. unknown model
     print("   ❓ Unknown model family detected")
@@ -150,6 +192,16 @@ def create_model_from_family(family: str, config: Dict[str, Any]):
             num_keypoints=config['num_keypoints'],
             backbone=config['backbone'],
             heatmap_size=config['heatmap_size']
+        )
+    
+    elif family == 'fastvit_lora':
+        return FastVitPoseModelLoRA(
+            num_keypoints=config['num_keypoints'],
+            backbone=config['backbone'],
+            heatmap_size=config['heatmap_size'],
+            lora_rank=config.get('lora_rank', 8),
+            lora_alpha=config.get('lora_alpha', 16),
+            lora_dropout=config.get('lora_dropout', 0.1)
         )
     
     else:
@@ -210,6 +262,9 @@ def export_fastvit_to_coreml(model, output_path: str) -> bool:
     
     return _export_to_coreml(model, 'fastvit', output_path)
 
+def export_fastvit_lora_to_coreml(model, output_path: str) -> bool:
+    """ Convert FastViT LoRA model to Core ML """
+    return _export_to_coreml(model, 'fastvit_lora', output_path)
 
 def _export_to_coreml(model, family: str, output_path: str) -> bool:
     """ Common Core ML conversion logic """
@@ -314,7 +369,7 @@ def load_checkpoint_and_export(checkpoint_path: str, output_path: str) -> bool:
         print("❌ Could not determine model family")
         return False
     
-    # 모델 생성
+    # create model
     try:
         model = create_model_from_family(family, config)
         model.load_state_dict(state_dict)
@@ -325,11 +380,12 @@ def load_checkpoint_and_export(checkpoint_path: str, output_path: str) -> bool:
         print(f"❌ Failed to create/load model: {e}")
         return False
     
-    # 적절한 변환 함수 선택 및 실행
+    # select appropriate export function
     export_functions = {
         'dinov2': export_dinov2_to_coreml,
         'dinov2_lora': export_dinov2_lora_to_coreml,
-        'fastvit': export_fastvit_to_coreml
+        'fastvit': export_fastvit_to_coreml,
+        'fastvit_lora': export_fastvit_lora_to_coreml
     }
     
     export_func = export_functions[family]

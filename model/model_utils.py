@@ -245,6 +245,11 @@ def save_model_checkpoint(model: BasePoseModel,
     is_lora_model = 'LoRA' in model.__class__.__name__
     enhanced_config_model['model_type'] = 'lora' if is_lora_model else 'standard'
     
+    # LoRA 모델의 경우 LoRA 구성 정보 저장
+    if is_lora_model and hasattr(model, 'lora_config'):
+        enhanced_config_model['lora_config'] = model.lora_config
+        print(f"Saving LoRA config: {model.lora_config}")
+    
     # Get backbone name and family info
     if hasattr(model, 'backbone_name'):
         backbone_name = model.backbone_name
@@ -316,9 +321,33 @@ def load_model_smart(model_path: str,
         # Create model from config
         model = create_model_from_config(config_model)
         
-        # Load state dict
-        model.load_state_dict(checkpoint['model_state_dict'])
+        # restore LoRA config
+        if hasattr(model, 'lora_config') and 'lora_config' in checkpoint.get('config_model', {}):
+            saved_lora_config = checkpoint['config_model']['lora_config']
+            model.lora_config = saved_lora_config
+            print(f"Restored LoRA config: {saved_lora_config}")
+        
+        # Load state dict with strict=False to handle potential missing keys
+        missing_keys, unexpected_keys = model.load_state_dict(checkpoint['model_state_dict'], strict=False)
+        
+        if missing_keys:
+            print(f"Warning: Missing keys in checkpoint: {missing_keys}")
+        if unexpected_keys:
+            print(f"Warning: Unexpected keys in checkpoint: {unexpected_keys}")
+        
         print(f"Loaded weights from epoch {checkpoint.get('epoch', 'unknown')}")
+        
+        # fix loading issues
+        if hasattr(model, 'apply_loading_fixes'):
+            model.apply_loading_fixes()
+        
+        # LoRA model specific handling
+        if 'LoRA' in model.__class__.__name__:
+            print("Applying LoRA-specific loading fixes...")
+            # check LoRA scaling
+            for name, module in model.named_modules():
+                if hasattr(module, 'scaling'):
+                    print(f"LoRA module {name}: scaling = {module.scaling}")
         
     elif is_supported_backbone(model_path) or is_family_name(model_path):
         # Resolve family name to actual model name
@@ -361,6 +390,10 @@ def load_model_smart(model_path: str,
     model.to(device)
     if eval_mode:
         model.eval()
+        # set evaluation mode for dropout and batch norm
+        for module in model.modules():
+            if isinstance(module, (torch.nn.Dropout, torch.nn.Dropout2d, torch.nn.BatchNorm1d, torch.nn.BatchNorm2d)):
+                module.eval()
     
     print(f"Model loaded on device: {device}")
     return model

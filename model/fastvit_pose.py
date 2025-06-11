@@ -109,6 +109,13 @@ class FastVitPoseModelLoRA(BasePoseModel):
         self.heatmap_size = heatmap_size
         self.num_keypoints = num_keypoints
         
+        # Store LoRA configuration for loading fixes
+        self.lora_config = {
+            'rank': lora_rank,
+            'alpha': lora_alpha,
+            'dropout': lora_dropout
+        }
+        
         # Load FastViT backbone
         self.backbone = timm.create_model(backbone, pretrained=True, num_classes=0)
 
@@ -140,6 +147,34 @@ class FastVitPoseModelLoRA(BasePoseModel):
         self.input_size = self.backbone_config.get('input_size', (3, 224, 224))
         self.image_size = self.input_size[1]  # Assuming square images
     
+    def apply_loading_fixes(self):
+        """fix loading issues for LoRA model"""
+        print("Applying FastVit LoRA loading fixes...")
+        
+        # 1. LoRA scaling
+        expected_scaling = self.lora_config['alpha'] / self.lora_config['rank']
+        
+        for name, module in self.named_modules():
+            if hasattr(module, 'scaling'):
+                if abs(module.scaling - expected_scaling) > 1e-6:
+                    print(f"Fixing LoRA scaling for {name}: {module.scaling} -> {expected_scaling}")
+                    module.scaling = expected_scaling
+        
+        # 2. fix dropout rate
+        for name, module in self.named_modules():
+            if hasattr(module, 'dropout') and hasattr(module.dropout, 'p'):
+                if abs(module.dropout.p - self.lora_config['dropout']) > 1e-6:
+                    print(f"Fixing dropout rate for {name}: {module.dropout.p} -> {self.lora_config['dropout']}")
+                    module.dropout.p = self.lora_config['dropout']
+        
+        # 3. set evaluation mode
+        self.eval()
+        for module in self.modules():
+            if isinstance(module, (torch.nn.Dropout, torch.nn.Dropout2d)):
+                module.eval()
+        
+        print("FastVit LoRA loading fixes applied successfully!")
+    
     def forward(self, pixel_values):
         return self.backbone(pixel_values)
     
@@ -167,9 +202,6 @@ class FastVitPoseModelLoRA(BasePoseModel):
                 print("Using default feature dimension of 768")
                 return 768
     
-    def forward(self, pixel_values):
-        return self.backbone(pixel_values)
-
     def count_parameters(self, trainable_only=True):
         """Count the number of parameters in the model"""
         if trainable_only:
