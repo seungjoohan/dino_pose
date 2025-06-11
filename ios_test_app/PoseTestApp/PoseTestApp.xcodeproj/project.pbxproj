@@ -7,8 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		AAA237102DF8CA4900935109 /* dino_small_finetuned.mlpackage in Resources */ = {isa = PBXBuildFile; fileRef = AA8BF00D2DF8B3A2000568E3 /* dino_small_finetuned.mlpackage */; };
-		AAA237122DF8CB0400935109 /* test_models in Resources */ = {isa = PBXBuildFile; fileRef = AAA237112DF8CB0400935109 /* test_models */; };
+		AAA237152DF8D90E00935109 /* test_models in Resources */ = {isa = PBXBuildFile; fileRef = AAA237142DF8D90E00935109 /* test_models */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -32,9 +31,7 @@
 		AA8BEFE02DF8B24D000568E3 /* PoseTestApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PoseTestApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA8BEFEE2DF8B24E000568E3 /* PoseTestAppTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PoseTestAppTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA8BEFF82DF8B24E000568E3 /* PoseTestAppUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PoseTestAppUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		AA8BF00D2DF8B3A2000568E3 /* dino_small_finetuned.mlpackage */ = {isa = PBXFileReference; lastKnownFileType = folder.mlpackage; path = dino_small_finetuned.mlpackage; sourceTree = "<group>"; };
-		AA8BF00E2DF8B3A2000568E3 /* dino_small_finetuned.pth */ = {isa = PBXFileReference; lastKnownFileType = file; path = dino_small_finetuned.pth; sourceTree = "<group>"; };
-		AAA237112DF8CB0400935109 /* test_models */ = {isa = PBXFileReference; lastKnownFileType = folder; name = test_models; path = ../../test_models; sourceTree = "<group>"; };
+		AAA237142DF8D90E00935109 /* test_models */ = {isa = PBXFileReference; lastKnownFileType = folder; name = test_models; path = ../../test_models; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -83,8 +80,7 @@
 		AA8BEFD72DF8B24D000568E3 = {
 			isa = PBXGroup;
 			children = (
-				AA8BF0122DF8B3A2000568E3 /* test_models */,
-				AAA237112DF8CB0400935109 /* test_models */,
+				AAA237142DF8D90E00935109 /* test_models */,
 				AA8BEFE22DF8B24D000568E3 /* PoseTestApp */,
 				AA8BEFF12DF8B24E000568E3 /* PoseTestAppTests */,
 				AA8BEFFB2DF8B24E000568E3 /* PoseTestAppUITests */,
@@ -100,40 +96,6 @@
 				AA8BEFF82DF8B24E000568E3 /* PoseTestAppUITests.xctest */,
 			);
 			name = Products;
-			sourceTree = "<group>";
-		};
-		AA8BF00F2DF8B3A2000568E3 /* dino_small_lora */ = {
-			isa = PBXGroup;
-			children = (
-				AA8BF00D2DF8B3A2000568E3 /* dino_small_finetuned.mlpackage */,
-				AA8BF00E2DF8B3A2000568E3 /* dino_small_finetuned.pth */,
-			);
-			path = dino_small_lora;
-			sourceTree = "<group>";
-		};
-		AA8BF0102DF8B3A2000568E3 /* dinov2_base */ = {
-			isa = PBXGroup;
-			children = (
-			);
-			path = dinov2_base;
-			sourceTree = "<group>";
-		};
-		AA8BF0112DF8B3A2000568E3 /* fastvit_test */ = {
-			isa = PBXGroup;
-			children = (
-			);
-			path = fastvit_test;
-			sourceTree = "<group>";
-		};
-		AA8BF0122DF8B3A2000568E3 /* test_models */ = {
-			isa = PBXGroup;
-			children = (
-				AA8BF00F2DF8B3A2000568E3 /* dino_small_lora */,
-				AA8BF0102DF8B3A2000568E3 /* dinov2_base */,
-				AA8BF0112DF8B3A2000568E3 /* fastvit_test */,
-			);
-			name = test_models;
-			path = ../../test_models;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -256,8 +218,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				AAA237122DF8CB0400935109 /* test_models in Resources */,
-				AAA237102DF8CA4900935109 /* dino_small_finetuned.mlpackage in Resources */,
+				AAA237152DF8D90E00935109 /* test_models in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

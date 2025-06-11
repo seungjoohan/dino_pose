@@ -6,7 +6,7 @@ A SwiftUI app for real-time pose estimation. Automatically discovers Core ML mod
 
 - **Automatic Model Discovery**: Auto-scans `.mlpackage` models in `test_models/` directory
 - **Model Selection**: Support for various model families including DINOv2, FastViT, etc.
-- **Real-time Inference**: Real-time pose estimation using front camera
+- **Real-time Inference**: Real-time pose estimation using front/back camera
 - **Skeleton Rendering**: Automatically displays skeleton when confidence ≥ 0.5
 - **Performance Monitoring**: Real-time display of FPS, inference time, and average confidence
 
@@ -91,7 +91,7 @@ Add camera permission to `Info.plist`:
 ## 🔧 Model Requirements
 
 ### Input
-- **Image**: 224×224 RGB
+- **Image**: dynamic image size - 224×224(default) RGB
 - **Format**: CVPixelBuffer (kCVPixelFormatType_32BGRA)
 
 ### Output
@@ -122,9 +122,11 @@ Add camera permission to `Info.plist`:
 
 ## 📊 Performance Benchmarks
 
-| Model | iPhone 13 Pro | iPhone 11 | iPhone XS |
-|-------|---------------|-----------|-----------|
-| DINOv2-small | ~100 FPS | ~60 FPS | ~40 FPS |
-| FastViT-T8 | ~80 FPS | ~50 FPS | ~35 FPS |
+
+|     Model    |   iPhone 15 Pro  | iPad Air 4th Gen |
+|--------------|------------------|------------------|
+| DINOv2-small |   **75~80** FPS  |   **45-55** FPS  |
+| FastViT-T8   |   **55-60** FPS  |   **50-60** FPS  |
+
 
 *Actual performance may vary depending on device and environment.* 

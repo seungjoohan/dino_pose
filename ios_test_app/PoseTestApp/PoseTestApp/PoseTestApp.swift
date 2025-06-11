@@ -159,10 +159,8 @@ struct ModelSelectionView: View {
     
     private func detectModelFamily(from name: String) -> String {
         let lowercased = name.lowercased()
-        if lowercased.contains("dinov2") && lowercased.contains("lora") {
-            return "DINOv2 LoRA"
-        } else if lowercased.contains("dinov2") {
-            return "DINOv2"
+        if lowercased.contains("dino") {
+            return "DINO"
         } else if lowercased.contains("fastvit") {
             return "FastViT"
         } else {
@@ -216,7 +214,13 @@ struct RealTimePoseView: View {
     @State private var inferenceTime: Double = 0
     @State private var avgConfidence: Double = 0
     @State private var lastProcessTime: CFAbsoluteTime = 0
+    @State private var actualFPS: Double = 0
+    @State private var lastFPSUpdate: CFAbsoluteTime = 0
+    @State private var frameCount: Int = 0
     @Environment(\.dismiss) private var dismiss
+    
+    // Frame processing counter
+    private static var frameLogCounter = 0
     
     init(modelInfo: MLModelInfo) {
         self.modelInfo = modelInfo
@@ -256,7 +260,9 @@ struct RealTimePoseView: View {
                             color: poseEstimator.isModelReady ? .green : .orange
                         )
                         
-                        InfoChip(text: "FPS: \(String(format: "%.1f", 1000.0 / max(inferenceTime, 1)))")
+                        InfoChip(text: "FPS: \(String(format: "%.1f", actualFPS))")
+                        
+                        InfoChip(text: "Theory: \(String(format: "%.0f", 1000.0 / max(inferenceTime, 1)))", color: .gray)
                         
                         InfoChip(
                             text: "Conf: \(String(format: "%.2f", avgConfidence))",
@@ -339,23 +345,37 @@ struct RealTimePoseView: View {
         // Add throttling to avoid overwhelming the system
         let currentTime = CFAbsoluteTimeGetCurrent()
         
-        // Process at most 10 FPS to avoid overwhelming the system
-        if currentTime - lastProcessTime < 0.1 {
-            return
-        }
+        // Measure actual maximum performance (no throttling)
+        // if currentTime - lastProcessTime < 0.033 {
+        //     return
+        // }
         lastProcessTime = currentTime
         
-        print("🎥 Processing frame...")
+        // Reduce logging overhead
+        // RealTimePoseView.frameLogCounter += 1
+        // if RealTimePoseView.frameLogCounter % 60 == 0 {
+        //     print("🎥 Processing frame... (\(RealTimePoseView.frameLogCounter) frames processed )")
+        // }
         
         estimator.estimatePose(from: pixelBuffer) { keypoints, confidence in
             let endTime = CFAbsoluteTimeGetCurrent()
             let timeElapsed = (endTime - startTime) * 1000
             
-            Task { @MainActor in
-                self.currentKeypoints = keypoints
-                self.avgConfidence = confidence
-                self.inferenceTime = timeElapsed
+                    Task { @MainActor in
+            self.currentKeypoints = keypoints
+            self.avgConfidence = confidence
+            self.inferenceTime = timeElapsed
+            
+            // Calculate processing FPS (inference completed frames)
+            self.frameCount += 1
+            let timeSinceLastUpdate = endTime - self.lastFPSUpdate
+            if timeSinceLastUpdate >= 1.0 { // Update every second
+                self.actualFPS = Double(self.frameCount) / timeSinceLastUpdate
+                self.lastFPSUpdate = endTime
+                self.frameCount = 0
+                print("🚀 PROCESSING FPS: \(String(format: "%.1f", self.actualFPS)) (completed inference)")
             }
+        }
         }
     }
 }
@@ -459,8 +479,9 @@ class CameraManager: NSObject, ObservableObject {
     func startSession() async {
         await withCheckedContinuation { continuation in
             sessionQueue.async {
+                print("🎬 Starting camera session setup...")
                 self.setupCaptureSession()
-                self.captureSession?.startRunning()
+                print("🎬 Camera session setup completed")
                 continuation.resume()
             }
         }
@@ -485,31 +506,220 @@ class CameraManager: NSObject, ObservableObject {
     }
     
     private func setupCaptureSession() {
-        let session = AVCaptureSession()
-        session.sessionPreset = .medium
+        // ✅ Check camera permission first
+        let authStatus = AVCaptureDevice.authorizationStatus(for: .video)
+        print("📷 Camera permission status: \(authStatus.rawValue)")
         
-        guard let camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: currentCameraPosition),
-              let input = try? AVCaptureDeviceInput(device: camera) else {
+        switch authStatus {
+        case .authorized:
+            print("✅ Camera permission granted")
+        case .notDetermined:
+            print("⚠️ Camera permission not determined, requesting...")
+            AVCaptureDevice.requestAccess(for: .video) { granted in
+                if granted {
+                    print("✅ Camera permission granted after request")
+                    DispatchQueue.global(qos: .userInitiated).async {
+                        self.setupCaptureSessionInternal()
+                    }
+                } else {
+                    print("❌ Camera permission denied")
+                }
+            }
+            return
+        case .denied, .restricted:
+            print("❌ Camera permission denied or restricted")
+            return
+        @unknown default:
+            print("❌ Unknown camera permission status")
             return
         }
         
+        setupCaptureSessionInternal()
+    }
+    
+    private func setupCaptureSessionInternal() {
+        let session = AVCaptureSession()
+        
+        // ✅ CRITICAL: Avoid session presets that can limit frame rate
+        // Instead use AVCaptureSessionPresetInputPriority to let device format control
+        session.sessionPreset = .inputPriority
+        print("🎥 Using session preset: .inputPriority (device format controls quality)")
+        
+        guard let camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: currentCameraPosition),
+              let input = try? AVCaptureDeviceInput(device: camera) else {
+            print("❌ Failed to create camera or input")
+            return
+        }
+        
+        // ✅ IMPORTANT: Begin configuration before making changes
+        session.beginConfiguration()
+        
+        // Configure camera for higher frame rate with better targeting
+        do {
+            try camera.lockForConfiguration()
+            
+            print("📋 Available formats: \(camera.formats.count)")
+            print("📱 Device: \(camera.localizedName)")
+            
+            // ✅ NEW: Find optimal format for 60 FPS specifically
+            var bestFormat: AVCaptureDevice.Format?
+            var targetFrameRate: Double = 60  // Target 60 FPS primarily
+            
+            // Sort formats by preference: higher FPS first, then reasonable resolution
+            let sortedFormats = camera.formats.sorted { (format1: AVCaptureDevice.Format, format2: AVCaptureDevice.Format) in
+                let dim1 = CMVideoFormatDescriptionGetDimensions(format1.formatDescription)
+                let dim2 = CMVideoFormatDescriptionGetDimensions(format2.formatDescription)
+                let fps1 = format1.videoSupportedFrameRateRanges.first?.maxFrameRate ?? 0
+                let fps2 = format2.videoSupportedFrameRateRanges.first?.maxFrameRate ?? 0
+                
+                // Prefer higher FPS, then consider resolution
+                if fps1 != fps2 {
+                    return fps1 > fps2
+                }
+                // If FPS is same, prefer reasonable resolution (720p-1080p range)
+                let area1 = Int(dim1.width) * Int(dim1.height)
+                let area2 = Int(dim2.width) * Int(dim2.height)
+                let ideal = 1280 * 720  // 720p as sweet spot
+                return abs(area1 - ideal) < abs(area2 - ideal)
+            }
+            
+            // Find best format with detailed analysis
+            for (index, format) in sortedFormats.enumerated() {
+                let dimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
+                let width = dimensions.width
+                let height = dimensions.height
+                let pixelFormat = CMFormatDescriptionGetMediaSubType(format.formatDescription)
+                
+                for range in format.videoSupportedFrameRateRanges {
+                    let maxFPS = range.maxFrameRate
+                    let minFPS = range.minFrameRate
+                    
+                    print("🎯 Format #\(index): \(width)x\(height) @ \(minFPS)-\(maxFPS) FPS (format: \(String(format: "%c%c%c%c", (pixelFormat >> 24) & 0xff, (pixelFormat >> 16) & 0xff, (pixelFormat >> 8) & 0xff, pixelFormat & 0xff)))")
+                    
+                    // Target criteria for optimal performance:
+                    // 1. Support 60 FPS or close to it
+                    // 2. Resolution between 480p-1080p (not too low, not too high)
+                    // 3. Prefer 420v/420f formats for better performance
+                    if maxFPS >= 50 && width >= 640 && width <= 1920 && height >= 480 && height <= 1080 {
+                        if bestFormat == nil || maxFPS > targetFrameRate {
+                            bestFormat = format
+                            targetFrameRate = maxFPS
+                            print("✨ NEW BEST: \(width)x\(height) @ \(maxFPS) FPS")
+                        }
+                    }
+                }
+            }
+            
+            // ✅ Apply the optimal format
+            if let format = bestFormat {
+                camera.activeFormat = format
+                
+                // ✅ CRITICAL: Set frame rate precisely to avoid 24 FPS trap
+                let desiredFPS = min(targetFrameRate, 60)  // Cap at 60 FPS
+                let frameDuration = CMTimeMake(value: 1, timescale: Int32(desiredFPS))
+                
+                // Verify the format actually supports this frame rate
+                let supportedRanges = format.videoSupportedFrameRateRanges
+                var canSetDesiredFPS = false
+                for range in supportedRanges {
+                    if desiredFPS >= range.minFrameRate && desiredFPS <= range.maxFrameRate {
+                        canSetDesiredFPS = true
+                        break
+                    }
+                }
+                
+                if canSetDesiredFPS {
+                    camera.activeVideoMinFrameDuration = frameDuration
+                    camera.activeVideoMaxFrameDuration = frameDuration
+                    print("✅ Camera configured for \(desiredFPS) FPS with format: \(bestFormat!)")
+                } else {
+                    print("⚠️ Desired FPS \(desiredFPS) not supported by format, using format default")
+                }
+                
+                // ✅ Additional optimizations to prevent 24 FPS limitation
+                // Disable auto exposure duration limits that can cause 24 FPS cap
+                if camera.isExposureModeSupported(.custom) {
+                    // Don't use custom exposure as it can interfere, but ensure auto exposure is set
+                    camera.exposureMode = .continuousAutoExposure
+                }
+                
+                // ✅ Disable video stabilization which can force 24 FPS in some cases
+                // (based on search results about 1/40s exposure limits)
+                
+            } else {
+                print("❌ No suitable high frame rate format found!")
+                // Fallback: try to find any format that supports >30 FPS
+                for format in camera.formats {
+                    for range in format.videoSupportedFrameRateRanges {
+                        if range.maxFrameRate > 30 {
+                            camera.activeFormat = format
+                            camera.activeVideoMinFrameDuration = CMTimeMake(value: 1, timescale: Int32(range.maxFrameRate))
+                            camera.activeVideoMaxFrameDuration = CMTimeMake(value: 1, timescale: Int32(range.maxFrameRate))
+                            print("📦 Fallback: Using \(format) at \(range.maxFrameRate) FPS")
+                            break
+                        }
+                    }
+                    if bestFormat != nil { break }
+                }
+            }
+            
+            camera.unlockForConfiguration()
+        } catch {
+            print("❌ Failed to configure camera: \(error)")
+        }
+        
+        // ✅ Add input to session
         if session.canAddInput(input) {
             session.addInput(input)
             currentInput = input
+            print("✅ Camera input added successfully")
+        } else {
+            print("❌ Cannot add camera input to session")
+            session.commitConfiguration()
+            return
         }
         
+        // Configure video output for optimal performance
         videoOutput.setSampleBufferDelegate(self, queue: sessionQueue)
         videoOutput.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
         
+        // Optimize for real-time processing
+        videoOutput.alwaysDiscardsLateVideoFrames = true
+        
         if session.canAddOutput(videoOutput) {
             session.addOutput(videoOutput)
+            print("✅ Video output added successfully")
+            
+            // ✅ IMPORTANT: Configure connection to prevent stabilization-induced FPS limits
+            if let connection = videoOutput.connection(with: .video) {
+                // Disable video stabilization that can cause 24 FPS limitation
+                if connection.isVideoStabilizationSupported {
+                    connection.preferredVideoStabilizationMode = .off
+                    print("📱 Video stabilization: DISABLED (prevents FPS limitations)")
+                }
+            }
+        } else {
+            print("❌ Cannot add video output")
+            session.commitConfiguration()
+            return
         }
         
         updateCameraOrientation()
         
+        // ✅ Commit configuration before setting session
+        session.commitConfiguration()
+        print("🔧 Session configuration committed")
+        
+        // ✅ Set session BEFORE starting
         DispatchQueue.main.async {
             self.captureSession = session
+            print("📱 Capture session set on main thread")
         }
+        
+        // ✅ CRITICAL: Actually start the session
+        print("🚀 Starting capture session...")
+        session.startRunning()
+        print("✅ Capture session started: \(session.isRunning)")
     }
     
     private func switchCameraSync() {
@@ -529,6 +739,54 @@ class CameraManager: NSObject, ObservableObject {
               let newInput = try? AVCaptureDeviceInput(device: newCamera) else {
             session.commitConfiguration()
             return
+        }
+        
+        // ✅ Apply same FPS optimization for switched camera
+        do {
+            try newCamera.lockForConfiguration()
+            
+            // Find best format for high FPS (same logic as setupCaptureSession)
+            var bestFormat: AVCaptureDevice.Format?
+            var targetFrameRate: Double = 60
+            
+            let sortedFormats = newCamera.formats.sorted { (format1: AVCaptureDevice.Format, format2: AVCaptureDevice.Format) in
+                let fps1 = format1.videoSupportedFrameRateRanges.first?.maxFrameRate ?? 0
+                let fps2 = format2.videoSupportedFrameRateRanges.first?.maxFrameRate ?? 0
+                return fps1 > fps2
+            }
+            
+            for format in sortedFormats {
+                let dimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
+                let width = dimensions.width
+                let height = dimensions.height
+                
+                for range in format.videoSupportedFrameRateRanges {
+                    if range.maxFrameRate >= 50 && width >= 640 && width <= 1920 && height >= 480 && height <= 1080 {
+                        if bestFormat == nil || range.maxFrameRate > targetFrameRate {
+                            bestFormat = format
+                            targetFrameRate = range.maxFrameRate
+                        }
+                    }
+                }
+            }
+            
+            if let format = bestFormat {
+                newCamera.activeFormat = format
+                let desiredFPS = min(targetFrameRate, 60)
+                let frameDuration = CMTimeMake(value: 1, timescale: Int32(desiredFPS))
+                newCamera.activeVideoMinFrameDuration = frameDuration
+                newCamera.activeVideoMaxFrameDuration = frameDuration
+                print("✅ Switched camera configured for \(desiredFPS) FPS")
+            }
+            
+            // Set continuous auto exposure
+            if newCamera.isExposureModeSupported(.continuousAutoExposure) {
+                newCamera.exposureMode = .continuousAutoExposure
+            }
+            
+            newCamera.unlockForConfiguration()
+        } catch {
+            print("❌ Failed to configure switched camera: \(error)")
         }
         
         if session.canAddInput(newInput) {
@@ -558,8 +816,27 @@ class CameraManager: NSObject, ObservableObject {
 }
 
 extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
+    private static var cameraFrameCount = 0
+    private static var lastCameraFPSUpdate: CFAbsoluteTime = 0
+    
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+        
+        // Track actual camera frame rate
+        CameraManager.cameraFrameCount += 1
+        let currentTime = CFAbsoluteTimeGetCurrent()
+        
+        if CameraManager.lastCameraFPSUpdate == 0 {
+            CameraManager.lastCameraFPSUpdate = currentTime
+        }
+        
+        let timeSinceLastUpdate = currentTime - CameraManager.lastCameraFPSUpdate
+        if timeSinceLastUpdate >= 1.0 {
+            let cameraFPS = Double(CameraManager.cameraFrameCount) / timeSinceLastUpdate
+            print("📷 CAMERA FPS: \(String(format: "%.1f", cameraFPS))")
+            CameraManager.cameraFrameCount = 0
+            CameraManager.lastCameraFPSUpdate = currentTime
+        }
         
         DispatchQueue.main.async {
             self.latestFrame = pixelBuffer
@@ -682,6 +959,9 @@ class PoseEstimator: ObservableObject {
     private var inputName: String = "image"
     @Published var isModelReady: Bool = false
     
+    // Performance logging counters
+    private static var perfLogCounter = 0
+    
     init(modelPath: String) {
         loadModel(from: modelPath)
     }
@@ -720,8 +1000,14 @@ class PoseEstimator: ObservableObject {
     
     private func loadCompiledModel(from url: URL) {
         do {
-            self.model = try MLModel(contentsOf: url)
-            print("✅ Model loaded successfully!")
+            // Configure for optimal performance
+            let config = MLModelConfiguration()
+            config.computeUnits = .all  // Use CPU + GPU + Neural Engine
+            config.allowLowPrecisionAccumulationOnGPU = true  // Enable FP16 on GPU
+            
+            self.model = try MLModel(contentsOf: url, configuration: config)
+            print("✅ Model loaded successfully with optimal configuration!")
+            print("🚀 Compute units: ALL (CPU + GPU + Neural Engine)")
             extractModelInputInfo()
             
             DispatchQueue.main.async {
@@ -761,19 +1047,29 @@ class PoseEstimator: ObservableObject {
             return
         }
         
-        guard let resizedBuffer = pixelBuffer.resized(to: inputSize) else {
-            print("❌ Failed to resize pixel buffer to \(inputSize)")
-            completion([], 0.0)
-            return
-        }
-        
-        do {
-            let input = try MLDictionaryFeatureProvider(dictionary: [inputName: MLFeatureValue(pixelBuffer: resizedBuffer)])
-            let output = try model.prediction(from: input)
+        // Run inference on background queue to avoid blocking main thread
+        DispatchQueue.global(qos: .userInteractive).async {
+            let preprocessStart = CFAbsoluteTimeGetCurrent()
+            
+            guard let resizedBuffer = pixelBuffer.resized(to: self.inputSize) else {
+                print("❌ Failed to resize pixel buffer to \(self.inputSize)")
+                DispatchQueue.main.async {
+                    completion([], 0.0)
+                }
+                return
+            }
+            
+            let preprocessTime = (CFAbsoluteTimeGetCurrent() - preprocessStart) * 1000
+            let inferenceStart = CFAbsoluteTimeGetCurrent()
+            
+            do {
+                let input = try MLDictionaryFeatureProvider(dictionary: [self.inputName: MLFeatureValue(pixelBuffer: resizedBuffer)])
+                let output = try model.prediction(from: input)
+                
+                let inferenceTime = (CFAbsoluteTimeGetCurrent() - inferenceStart) * 1000
             
             // Debug: Print all available output features
             let outputFeatureNames = output.featureNames
-            print("🔍 Available output features: \(outputFeatureNames)")
             
             // Try to find heatmaps with different possible names
             let possibleHeatmapNames = ["heatmaps", "output", "predictions", "keypoint_heatmaps", "pose_heatmaps"]
@@ -784,7 +1080,6 @@ class PoseEstimator: ObservableObject {
                 if let feature = output.featureValue(for: featureName)?.multiArrayValue {
                     heatmaps = feature
                     usedFeatureName = featureName
-                    print("✅ Found heatmaps at feature: \(featureName)")
                     break
                 }
             }
@@ -796,18 +1091,27 @@ class PoseEstimator: ObservableObject {
                 return
             }
             
-            print("📊 Heatmaps shape: \(heatmaps.shape) (using feature: \(usedFeatureName ?? "unknown"))")
             
-            let keypoints = parseKeypoints(from: heatmaps)
-            let avgConfidence = keypoints.map { $0.confidence }.reduce(0, +) / Double(keypoints.count)
+                            let keypoints = self.parseKeypoints(from: heatmaps)
+                let avgConfidence = keypoints.map { $0.confidence }.reduce(0, +) / Double(keypoints.count)
             
-            print("🎯 Parsed \(keypoints.count) keypoints, avg confidence: \(String(format: "%.3f", avgConfidence))")
-            
-            completion(keypoints, avgConfidence)
-            
-        } catch {
-            print("❌ Prediction error: \(error)")
-            completion([], 0.0)
+                // Log performance occasionally to reduce overhead
+                PoseEstimator.perfLogCounter += 1
+                if PoseEstimator.perfLogCounter % 30 == 0 {
+                    print("🎯 Parsed \(keypoints.count) keypoints, avg confidence: \(String(format: "%.3f", avgConfidence))")
+                    print("⏱️ Timing - Preprocess: \(String(format: "%.1f", preprocessTime))ms, Inference: \(String(format: "%.1f", inferenceTime))ms")
+                }
+                
+                DispatchQueue.main.async {
+                    completion(keypoints, avgConfidence)
+                }
+                
+            } catch {
+                print("❌ Prediction error: \(error)")
+                DispatchQueue.main.async {
+                    completion([], 0.0)
+                }
+            }
         }
     }
     
@@ -847,47 +1151,41 @@ class PoseEstimator: ObservableObject {
 
 // MARK: - CVPixelBuffer Extension
 extension CVPixelBuffer {
+    private static var logCounter = 0
+    
     func resized(to size: CGSize) -> CVPixelBuffer? {
+        // Fast GPU-accelerated resizing using CIImage
+        return resizeWithCoreImage(to: size)
+    }
+    
+    private func resizeWithCoreImage(to size: CGSize) -> CVPixelBuffer? {
         let width = Int(size.width)
         let height = Int(size.height)
         
-        let originalWidth = CVPixelBufferGetWidth(self)
-        let originalHeight = CVPixelBufferGetHeight(self)
-        
-        print("📏 Resizing from \(originalWidth)x\(originalHeight) to \(width)x\(height)")
-        
         var resizedBuffer: CVPixelBuffer?
-        let status = CVPixelBufferCreate(kCFAllocatorDefault, width, height, kCVPixelFormatType_32BGRA, nil, &resizedBuffer)
+        let attrs = [
+            kCVPixelBufferCGImageCompatibilityKey: kCFBooleanTrue!,
+            kCVPixelBufferCGBitmapContextCompatibilityKey: kCFBooleanTrue!,
+            kCVPixelBufferIOSurfacePropertiesKey: [:]
+        ] as CFDictionary
         
-        guard status == kCVReturnSuccess, let buffer = resizedBuffer else { 
-            print("❌ Failed to create CVPixelBuffer with status: \(status)")
-            return nil 
+        let status = CVPixelBufferCreate(kCFAllocatorDefault, width, height, kCVPixelFormatType_32BGRA, attrs, &resizedBuffer)
+        
+        guard status == kCVReturnSuccess, let buffer = resizedBuffer else {
+            return nil
         }
         
-        CVPixelBufferLockBaseAddress(self, .readOnly)
-        CVPixelBufferLockBaseAddress(buffer, [])
-        
-        defer {
-            CVPixelBufferUnlockBaseAddress(self, .readOnly)
-            CVPixelBufferUnlockBaseAddress(buffer, [])
-        }
-        
-        guard let context = CGContext(
-            data: CVPixelBufferGetBaseAddress(buffer),
-            width: width,
-            height: height,
-            bitsPerComponent: 8,
-            bytesPerRow: CVPixelBufferGetBytesPerRow(buffer),
-            space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGImageAlphaInfo.noneSkipFirst.rawValue
-        ) else { return nil }
-        
+        // Use CIContext with Metal for GPU acceleration
+        let ciContext = CIContext(options: [.useSoftwareRenderer: false])
         let ciImage = CIImage(cvPixelBuffer: self)
-        let ciContext = CIContext()
         
-        if let cgImage = ciContext.createCGImage(ciImage, from: CGRect(x: 0, y: 0, width: CVPixelBufferGetWidth(self), height: CVPixelBufferGetHeight(self))) {
-            context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
-        }
+        // Scale to target size
+        let scaleX = CGFloat(width) / CGFloat(CVPixelBufferGetWidth(self))
+        let scaleY = CGFloat(height) / CGFloat(CVPixelBufferGetHeight(self))
+        let scaledImage = ciImage.transformed(by: CGAffineTransform(scaleX: scaleX, y: scaleY))
+        
+        // Render to output buffer
+        ciContext.render(scaledImage, to: buffer)
         
         return buffer
     }

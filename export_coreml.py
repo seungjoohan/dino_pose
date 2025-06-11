@@ -251,7 +251,8 @@ def _export_to_coreml(model, family: str, output_path: str) -> bool:
                 ct.TensorType(name="depths")
             ],
             minimum_deployment_target=ct.target.iOS15,
-            convert_to="mlprogram"
+            convert_to="mlprogram",
+            compute_units=ct.ComputeUnit.ALL  # Use CPU + GPU + Neural Engine
         )
         
         # 5. set metadata
