@@ -25,41 +25,30 @@ def get_default_configs():
         "is_flipping": True,
         "is_resize_shortest_edge": True,
         "is_crop": True,
-<<<<<<< Updated upstream
-        "is_occultation": False,
-        "heatmap_std": 0.5
-=======
+        "is_occultation": True,
+        "heatmap_std": 0.5,
         "is_occultation": True,
         "heatmap_std": 1.5
->>>>>>> Stashed changes
     }
 
     config_training = {
         "batch_size": 32,
         "learning_rate": 3e-5,
         "weight_decay": 1e-6,
-<<<<<<< Updated upstream
-        "num_epochs": 5,
-        "multiprocessing_num": 4,
-        "save_freq": 5,
-        "checkpoint_dir": "dinov2_test"
-=======
         "num_epochs": 100,
         "multiprocessing_num": 4,
-        "print_freq": 20,
         "save_freq": 10,
-        "checkpoint_dir": "fastvit_lora"
->>>>>>> Stashed changes
+        "checkpoint_dir": "dinov2_finetune"
     }
 
     config_model = {
-        "model_name": "fastvit",
-        "load_model": "fastvit_lora/best_model_100.pth",
+        "model_name": "facebook/dinov2-small",
+        "load_model": "dinov2_finetune/best_model_20.pth",
         "num_keypoints": 24,
         "unfreeze_last_n_layers": 4,
         "use_lora": True,
-        "lora_rank": 8,
-        "lora_alpha": 16,
+        "lora_rank": 16,
+        "lora_alpha": 32,
         "lora_dropout": 0.1,
         "output_heatmap_size": 48
     }

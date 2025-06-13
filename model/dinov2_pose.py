@@ -183,6 +183,11 @@ class Dinov2PoseModelLoRA(BasePoseModel):
         self.heatmap_size = heatmap_size
         self.num_keypoints = num_keypoints
         self._coreml_patch_applied = False
+        self.lora_config = {
+            'rank': lora_rank,
+            'alpha': lora_alpha,
+            'dropout': lora_dropout
+        }
 
         # Freeze backbone first
         for param in self.backbone.parameters():
@@ -316,7 +321,34 @@ class Dinov2PoseModelLoRA(BasePoseModel):
         for name, param in self.named_parameters():
             if param.requires_grad:
                 print(f"Trainable: {name}, Shape: {param.shape}, Parameters: {param.numel():,}")
+
+    def apply_loading_fixes(self):
+        """fix loading issues for LoRA model"""
+        print("Applying Dinov2 LoRA loading fixes...")
         
+        # 1. LoRA scaling
+        expected_scaling = self.lora_config['alpha'] / self.lora_config['rank']
+        
+        for name, module in self.named_modules():
+            if hasattr(module, 'scaling'):
+                if abs(module.scaling - expected_scaling) > 1e-6:
+                    print(f"Fixing LoRA scaling for {name}: {module.scaling} -> {expected_scaling}")
+                    module.scaling = expected_scaling
+        
+        # 2. fix dropout rate
+        for name, module in self.named_modules():
+            if hasattr(module, 'dropout') and hasattr(module.dropout, 'p'):
+                if abs(module.dropout.p - self.lora_config['dropout']) > 1e-6:
+                    print(f"Fixing dropout rate for {name}: {module.dropout.p} -> {self.lora_config['dropout']}")
+                    module.dropout.p = self.lora_config['dropout']
+        
+        # 3. set evaluation mode
+        self.eval()
+        for module in self.modules():
+            if isinstance(module, (torch.nn.Dropout, torch.nn.Dropout2d)):
+                module.eval()
+        
+        print("Dinov2 LoRA loading fixes applied successfully!")
     
 def __main__():
     model = Dinov2PoseModelLoRA()
