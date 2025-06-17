@@ -208,6 +208,34 @@ class PoseHeads(nn.Module):
             return sum(p.numel() for p in self.parameters())
 
 
+class HourglassModule(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super().__init__()
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.down = nn.Sequential(
+            nn.MaxPool2d(2),
+            nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True)
+        )
+        self.up = nn.Sequential(
+            nn.ConvTranspose2d(out_channels, in_channels, 2, stride=2),
+            nn.BatchNorm2d(in_channels),
+            nn.ReLU(inplace=True)
+        )
+        self.skip = nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, 1),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True)
+        )
+
+    def forward(self, x):
+        skip = self.skip(x)
+        x = self.down(x)
+        x = self.up(x)
+        return x + skip
+
 class SpatialAwareHeatmapHead(nn.Module):
     """
     Spatial-aware heatmap head that preserves spatial information
@@ -233,7 +261,8 @@ class SpatialAwareHeatmapHead(nn.Module):
             nn.ReLU(inplace=True),
             nn.Conv2d(512, 256, kernel_size=3, padding=1),
             nn.BatchNorm2d(256),
-            nn.ReLU(inplace=True)
+            nn.ReLU(inplace=True),
+            HourglassModule(256, 256)
         )
         
         upsampling_stages = []

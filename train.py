@@ -286,15 +286,16 @@ def main(args):
     scheduler = ReduceLROnPlateau(
         optimizer,
         mode='min',
-        factor=0.5,
-        patience=5
+        factor=0.7,
+        patience=3,
+        min_lr=1e-6
     )
     
     # Initialize loss weighting
     loss_weighting = DynamicLossWeighting(
-        initial_weight=0.1,
+        initial_weight=0.1, # try 0.2
         target_ratio=1.0,
-        adjustment_rate=0.1
+        adjustment_rate=0.1 # try 0.05
     )
     
     # Training loop

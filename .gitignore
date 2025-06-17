@@ -3,6 +3,7 @@
 *pycache*
 *venv*
 *test*.py
+config.py
 
 # Model files
 dinov2_test/.
