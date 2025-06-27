@@ -247,6 +247,7 @@ def main(args):
     # Check if we need to load from checkpoint or create new model
     if config_model['load_model'] and config_model['load_model'].endswith('.pth'):
         print(f"Loading model from {config_model['load_model']}")
+        checkpoint = torch.load(config_model['load_model'])
         model = load_model_smart(config_model['load_model'], eval_mode=False)
     else:
         model = create_model_from_config(config_model)
@@ -280,7 +281,9 @@ def main(args):
         compiled_model.parameters(),
         lr=config_training['learning_rate'],
         weight_decay=config_training['weight_decay']
-    )
+    ) 
+    if config_model['load_model'] and 'optimizer_state_dict' in checkpoint:
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
     
     # Create scheduler
     scheduler = ReduceLROnPlateau(
@@ -290,10 +293,12 @@ def main(args):
         patience=3,
         min_lr=1e-6
     )
+    if config_model['load_model'] and 'scheduler_state_dict' in checkpoint:
+        scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
     
     # Initialize loss weighting
     loss_weighting = DynamicLossWeighting(
-        initial_weight=0.1, # try 0.2
+        initial_weight= checkpoint.get('loss_weight', 0.1) if config_model['load_model'] else 0.1, # try 0.2
         target_ratio=1.0,
         adjustment_rate=0.1 # try 0.05
     )
@@ -305,6 +310,7 @@ def main(args):
     best_pckh_2d, best_pckh_3d = compute_pckh_dataset(model, config_dataset['val_images_dir'], config_dataset['val_annotation_json'], config_model['model_name'], device)
     print(f"Starting training with PCKh (2D): {best_pckh_2d:.4f}, PCKh (3D): {best_pckh_3d:.4f}")
     
+    compiled_model.train()
     for epoch in range(config_training['num_epochs']):
         # Train
         train_loss, train_kp_loss, train_z_loss = train_one_epoch(
@@ -335,22 +341,6 @@ def main(args):
             scheduler.step(val_loss)
             # Update best weight based on validation loss
             loss_weighting.update_best_weight(val_loss)
-            
-        # # Save checkpoint - disabled for now
-        # if (epoch + 1) % 20 == 0:
-        #     checkpoint_path = os.path.join(config_training['checkpoint_dir'], f'checkpoint_epoch_{epoch+1}.pth')
-        #     save_model_checkpoint(
-        #         model=compiled_model,
-        #         optimizer=optimizer,
-        #         epoch=epoch,
-        #         train_loss=train_loss,
-        #         valid_loss=val_loss,
-        #         loss_weight=loss_weighting.best_weight,
-        #         config_model=config_model,
-        #         config_training=config_training,
-        #         config_preproc=config_preproc,
-        #         save_path=checkpoint_path
-        #     )
         
         # Save best model
         if (epoch + 1) % config_training['save_freq'] == 0:
@@ -371,7 +361,8 @@ def main(args):
                     config_model=config_model,
                     config_training=config_training,
                     config_preproc=config_preproc,
-                    save_path=checkpoint_path
+                    save_path=checkpoint_path,
+                    scheduler=scheduler
                 )
             
             # update best pckh scores
@@ -392,7 +383,8 @@ def main(args):
         config_model=config_model,
         config_training=config_training,
         config_preproc=config_preproc,
-        save_path=checkpoint_path
+        save_path=checkpoint_path,
+        scheduler=scheduler
     )
     
     # Plot losses

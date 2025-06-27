@@ -7,7 +7,8 @@ class LoRALayer(nn.Module):
         super(LoRALayer, self).__init__()
         self.in_features = in_features
         self.out_features = out_features
-        self.scaling = alpha / r
+        self.rank = r
+        self.alpha = alpha
         
         # LoRA parameters
         self.lora_A = nn.Parameter(torch.zeros(in_features, r))
@@ -17,6 +18,10 @@ class LoRALayer(nn.Module):
         # Initialize weights
         nn.init.kaiming_uniform_(self.lora_A, a=math.sqrt(5))
         nn.init.zeros_(self.lora_B)
+    
+    @property
+    def scaling(self):
+        return self.alpha / self.rank
         
     def forward(self, x):
         # LoRAoutput
@@ -41,6 +46,10 @@ class LoRAAttention(nn.Module):
         for param in self.original_attention.parameters():
             param.requires_grad = False
 
+    @property
+    def scaling(self):
+        return self.alpha / self.rank
+
     def forward(self, hidden_states, head_mask=None, output_attentions=False):
         attention_outputs = self.original_attention(hidden_states, head_mask, output_attentions)
         attention_output = attention_outputs[0]
@@ -63,7 +72,6 @@ class ConvLoRA(nn.Module):
         self.original_conv = original_conv
         self.rank = r
         self.alpha = alpha
-        self.scaling = alpha / r
 
         # Get dimensions from original conv
         self.in_channels = original_conv.in_channels
@@ -96,6 +104,10 @@ class ConvLoRA(nn.Module):
             param.requires_grad = True
         for param in self.lora_B.parameters():
             param.requires_grad = True
+
+    @property
+    def scaling(self):
+        return self.alpha / self.rank
 
     def forward(self, x):
         # Original conv output

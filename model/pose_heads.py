@@ -213,17 +213,52 @@ class HourglassModule(nn.Module):
         super().__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
-        self.down = nn.Sequential(
-            nn.MaxPool2d(2),
-            nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
+        
+        # Depthwise convolution for efficient feature extraction
+        self.depthwise_conv = nn.Sequential(
+            nn.Conv2d(in_channels, in_channels, kernel_size=3, padding=1, groups=in_channels),
+            nn.BatchNorm2d(in_channels),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(in_channels, out_channels, kernel_size=1),  # Pointwise conv for channel mixing
             nn.BatchNorm2d(out_channels),
             nn.ReLU(inplace=True)
         )
-        self.up = nn.Sequential(
-            nn.ConvTranspose2d(out_channels, in_channels, 2, stride=2),
-            nn.BatchNorm2d(in_channels),
+        
+        # Progressive downsampling
+        self.down1 = nn.Sequential(
+            nn.Conv2d(in_channels, out_channels//2, stride=2, kernel_size=3, padding=1),
+            nn.BatchNorm2d(out_channels//2),
             nn.ReLU(inplace=True)
         )
+        self.down2 = nn.Sequential(
+            nn.Conv2d(out_channels//2, out_channels//4, stride=2, kernel_size=3, padding=1),
+            nn.BatchNorm2d(out_channels//4),
+            nn.ReLU(inplace=True)
+        )
+        
+        # Bottleneck with residual connection
+        self.bottleneck = nn.Sequential(
+            nn.Conv2d(out_channels//4, out_channels//4, kernel_size=3, padding=1),
+            nn.BatchNorm2d(out_channels//4),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(out_channels//4, out_channels//4, kernel_size=3, padding=1),
+            nn.BatchNorm2d(out_channels//4)
+        )
+        self.bottleneck_relu = nn.ReLU(inplace=True)
+        
+        # Progressive upsampling
+        self.up1 = nn.Sequential(
+            nn.ConvTranspose2d(out_channels//4, out_channels//2, 2, stride=2),
+            nn.BatchNorm2d(out_channels//2),
+            nn.ReLU(inplace=True)
+        )
+        self.up2 = nn.Sequential(
+            nn.ConvTranspose2d(out_channels//2, out_channels, 2, stride=2),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True)
+        )
+        
+        # Skip connection
         self.skip = nn.Sequential(
             nn.Conv2d(in_channels, out_channels, 1),
             nn.BatchNorm2d(out_channels),
@@ -232,9 +267,22 @@ class HourglassModule(nn.Module):
 
     def forward(self, x):
         skip = self.skip(x)
-        x = self.down(x)
-        x = self.up(x)
-        return x + skip
+        depth_x = self.depthwise_conv(x)
+        
+        # Downsampling path
+        down1 = self.down1(x)
+        down2 = self.down2(down1)
+        
+        # Bottleneck with residual
+        bottleneck = self.bottleneck(down2)
+        bottleneck = self.bottleneck_relu(bottleneck + down2)  # Residual connection
+        
+        # Upsampling path
+        up1 = self.up1(bottleneck)
+        up2 = self.up2(up1)
+        
+        # Combine all paths
+        return up2 + skip + depth_x
 
 class SpatialAwareHeatmapHead(nn.Module):
     """
@@ -259,10 +307,10 @@ class SpatialAwareHeatmapHead(nn.Module):
             nn.Conv2d(feat_channels, 512, kernel_size=3, padding=1),
             nn.BatchNorm2d(512),
             nn.ReLU(inplace=True),
+            HourglassModule(512, 512),
             nn.Conv2d(512, 256, kernel_size=3, padding=1),
             nn.BatchNorm2d(256),
-            nn.ReLU(inplace=True),
-            HourglassModule(256, 256)
+            nn.ReLU(inplace=True)
         )
         
         upsampling_stages = []

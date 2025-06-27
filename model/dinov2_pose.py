@@ -326,20 +326,17 @@ class Dinov2PoseModelLoRA(BasePoseModel):
         """fix loading issues for LoRA model"""
         print("Applying Dinov2 LoRA loading fixes...")
         
-        # 1. LoRA scaling
-        expected_scaling = self.lora_config['alpha'] / self.lora_config['rank']
-        
+        # 1. Update LoRA alpha and rank values to match config
         for name, module in self.named_modules():
-            if hasattr(module, 'scaling'):
-                if abs(module.scaling - expected_scaling) > 1e-6:
-                    print(f"Fixing LoRA scaling for {name}: {module.scaling} -> {expected_scaling}")
-                    module.scaling = expected_scaling
+            if hasattr(module, 'alpha') and hasattr(module, 'rank'):
+                if module.alpha != self.lora_config['alpha'] or module.rank != self.lora_config['rank']:
+                    module.alpha = self.lora_config['alpha']
+                    module.rank = self.lora_config['rank']
         
         # 2. fix dropout rate
         for name, module in self.named_modules():
             if hasattr(module, 'dropout') and hasattr(module.dropout, 'p'):
                 if abs(module.dropout.p - self.lora_config['dropout']) > 1e-6:
-                    print(f"Fixing dropout rate for {name}: {module.dropout.p} -> {self.lora_config['dropout']}")
                     module.dropout.p = self.lora_config['dropout']
         
         # 3. set evaluation mode

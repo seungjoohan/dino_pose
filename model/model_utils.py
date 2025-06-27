@@ -233,7 +233,8 @@ def save_model_checkpoint(model: BasePoseModel,
                          config_model: Dict[str, Any],
                          config_training: Dict[str, Any],
                          config_preproc: Dict[str, Any],
-                         save_path: str) -> None:
+                         save_path: str,
+                         scheduler: Optional[torch.optim.lr_scheduler._LRScheduler] = None) -> None:
     """
     Save model checkpoint with all necessary metadata
     """
@@ -244,11 +245,6 @@ def save_model_checkpoint(model: BasePoseModel,
     # Determine model type based on class name
     is_lora_model = 'LoRA' in model.__class__.__name__
     enhanced_config_model['model_type'] = 'lora' if is_lora_model else 'standard'
-    
-    # LoRA 모델의 경우 LoRA 구성 정보 저장
-    if is_lora_model and hasattr(model, 'lora_config'):
-        enhanced_config_model['lora_config'] = model.lora_config
-        print(f"Saving LoRA config: {model.lora_config}")
     
     # Get backbone name and family info
     if hasattr(model, 'backbone_name'):
@@ -278,6 +274,10 @@ def save_model_checkpoint(model: BasePoseModel,
             'heatmap_size': model.heatmap_size,
         }
     }
+    
+    # Add scheduler state if provided
+    if scheduler is not None:
+        checkpoint['scheduler_state_dict'] = scheduler.state_dict()
     
     torch.save(checkpoint, save_path)
     print(f"Saved checkpoint to {save_path}")
@@ -318,14 +318,8 @@ def load_model_smart(model_path: str,
         else:
             raise ValueError(f"Checkpoint {model_path} missing model configuration")
         
-        # Create model from config
+        # Create model from config (now with correct LoRA settings)
         model = create_model_from_config(config_model)
-        
-        # restore LoRA config
-        if hasattr(model, 'lora_config') and 'lora_config' in checkpoint.get('config_model', {}):
-            saved_lora_config = checkpoint['config_model']['lora_config']
-            model.lora_config = saved_lora_config
-            print(f"Restored LoRA config: {saved_lora_config}")
         
         # Load state dict with strict=False to handle potential missing keys
         missing_keys, unexpected_keys = model.load_state_dict(checkpoint['model_state_dict'], strict=False)
@@ -344,10 +338,10 @@ def load_model_smart(model_path: str,
         # LoRA model specific handling
         if 'LoRA' in model.__class__.__name__:
             print("Applying LoRA-specific loading fixes...")
-            # check LoRA scaling
+            # check LoRA alpha and rank values
             for name, module in model.named_modules():
-                if hasattr(module, 'scaling'):
-                    print(f"LoRA module {name}: scaling = {module.scaling}")
+                if hasattr(module, 'alpha') and hasattr(module, 'rank'):
+                    print(f"LoRA module {name}: alpha = {module.alpha}, rank = {module.rank}, scaling = {module.scaling}")
         
     elif is_supported_backbone(model_path) or is_family_name(model_path):
         # Resolve family name to actual model name
